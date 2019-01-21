@@ -1,0 +1,24 @@
+#!/bin/sh
+set -e -u -x
+os=$(uname -s)
+case "$os" in
+Linux)
+    ext=so
+    var=LD_PRELOAD
+    ;;
+Darwin)
+    ext=dylib
+    var=DYLD_INSERT_LIBRARIES
+    ;;
+*)
+    echo "Unsupported OS: $os" >&2
+    exit 1
+esac
+interceptor=$(dirname "$0")/libz-dumper.$ext
+if [ ! -e "$interceptor" ]; then
+    echo "$interceptor does not exist" >&2
+    exit 1
+fi
+eval "$var=\${$var:+\$$var:}$interceptor"
+eval export $var
+exec "$@"
