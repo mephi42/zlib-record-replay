@@ -57,19 +57,25 @@ static void *align_up_with_offset (void *p, int size, int offset)
   return (char *) align_up ((char *) p - offset, size) + offset;
 }
 
-static int fread_all (void *buf, size_t count, FILE *stream)
+static ssize_t fread_all (void *buf, size_t count, FILE *stream)
 {
   ssize_t ret;
+  size_t n = count;
 
-  while (count)
+  while (n)
     {
-      ret = fread (buf, 1, count, stream);
-      if (ret <= 0)
-        return -1;
+      ret = fread (buf, 1, n, stream);
+      if (ret == 0)
+        {
+          if (feof (stream))
+            break;
+          else
+            return -1;
+        }
       buf = (char *) buf + ret;
-      count -= ret;
+      n -= ret;
     }
-  return 0;
+  return count - n;
 }
 
 static int replay_deflate (z_streamp strm, FILE *mfp, FILE *ifp, FILE *ofp,
@@ -84,6 +90,7 @@ static int replay_deflate (z_streamp strm, FILE *mfp, FILE *ifp, FILE *ofp,
   unsigned int exp_consumed_out;
   void *buf;
   void *exp_buf;
+  ssize_t valid_out;
   int err;
   unsigned int consumed_in;
   unsigned int consumed_out;
@@ -115,7 +122,7 @@ static int replay_deflate (z_streamp strm, FILE *mfp, FILE *ifp, FILE *ofp,
       strm->next_in + avail_in, PAGE_SIZE, (int) next_out & PAGE_OFFSET_MASK);
   strm->avail_out = avail_out;
   exp_buf = strm->next_out + avail_out;
-  if (fread_all (strm->next_in, avail_in, ifp) == -1)
+  if (fread_all (strm->next_in, avail_in, ifp) != avail_in)
     {
       fprintf (stderr, "%s: could not read %u bytes from the input file\n",
                argv0, avail_in);
@@ -123,18 +130,19 @@ static int replay_deflate (z_streamp strm, FILE *mfp, FILE *ifp, FILE *ofp,
     }
   if (fseek (ifp, (long) (int) (exp_consumed_in - avail_in), SEEK_CUR) == -1)
     {
-      fprintf (stderr, "%s: could not seek in input file\n", argv0);
+      fprintf (stderr, "%s: could not seek in the input file\n", argv0);
       goto free_buf;
     }
-  if (fread_all (exp_buf, avail_out, ofp) == -1)
+  valid_out = fread_all (exp_buf, avail_out, ofp);
+  if (valid_out == -1)
     {
       fprintf (stderr, "%s: could not read %u bytes from the output file\n",
                argv0, avail_out);
       goto free_buf;
     }
-  if (fseek (ofp, (long) (int) (exp_consumed_out - avail_out), SEEK_CUR) == -1)
+  if (fseek (ofp, (long) (int) (exp_consumed_out - valid_out), SEEK_CUR) == -1)
     {
-      fprintf (stderr, "%s: could not seek in output file\n", argv0);
+      fprintf (stderr, "%s: could not seek in the output file\n", argv0);
       goto free_buf;
     }
   err = deflate (strm, flush);
@@ -151,10 +159,7 @@ static int replay_deflate (z_streamp strm, FILE *mfp, FILE *ifp, FILE *ofp,
   else if (memcmp (strm->next_out - consumed_out, exp_buf, consumed_out) != 0)
     fprintf (stderr, "%s: compressed data mismatch\n", argv0);
   else
-    {
-      fprintf (stderr, "%s: ok\n", argv0);
-      ret = EXIT_SUCCESS;
-    }
+    ret = EXIT_SUCCESS;
 free_buf:
   free (buf);
   return ret;
