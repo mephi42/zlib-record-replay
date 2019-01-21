@@ -4,4 +4,4 @@ Intercept and dump zlib calls.
 
 ## Usage
 
-```zlib-dumper utility [argument ...]```
+```zlib-dump utility [argument ...]```

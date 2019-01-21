@@ -14,7 +14,7 @@ Darwin)
     echo "Unsupported OS: $os" >&2
     exit 1
 esac
-interceptor=$(dirname "$0")/libz-dumper.$ext
+interceptor=$(dirname "$0")/libz-dump.$ext
 if [ ! -e "$interceptor" ]; then
     echo "$interceptor does not exist" >&2
     exit 1
