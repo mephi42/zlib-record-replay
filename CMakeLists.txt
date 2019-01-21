@@ -8,6 +8,7 @@ if (DEFINED UTHASH_PREFIX)
 endif ()
 set(TARGET z-dumper)
 add_library(${TARGET} SHARED zlib-dumper.c)
+# TODO: -pedantic
 target_compile_options(${TARGET} PRIVATE -Wall -Wextra -Werror -pthread)
 target_link_libraries(${TARGET} dl)
 if (APPLE)

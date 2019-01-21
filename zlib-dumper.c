@@ -1,5 +1,4 @@
 #define _GNU_SOURCE
-#include <dlfcn.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -14,6 +13,7 @@
 #define ORIG(x) x
 #define REPLACEMENT(x) replacement_ ## x
 #else
+#include <dlfcn.h>
 #define ORIG(x) orig_ ## x
 #define REPLACEMENT(x) x
 #endif
@@ -56,6 +56,7 @@ struct hash_entry {
   z_streamp strm;
   int ifd;
   int ofd;
+  int mfd;
   UT_hash_handle hh;
 };
 
@@ -80,6 +81,8 @@ static struct hash_entry *add_stream_or_die (z_streamp strm, const char *kind)
   p->ifd = creat_or_die (path);
   snprintf(path, sizeof (path), "%s.%lu.%lu.out", kind, pid, counter);
   p->ofd = creat_or_die (path);
+  snprintf(path, sizeof (path), "%s.%lu.%lu.meta", kind, pid, counter);
+  p->mfd = creat_or_die (path);
   pthread_mutex_lock (&mutex);
   HASH_ADD (hh, streams, strm, sizeof (z_streamp), p);
   pthread_mutex_unlock (&mutex);
@@ -94,7 +97,7 @@ static struct hash_entry *find_stream_or_die (z_streamp strm)
   HASH_FIND (hh, streams, &strm, sizeof (z_streamp), p);
   pthread_mutex_unlock (&mutex);
   if (!p)
-    die ("unknown stream: %p", strm);
+    die ("unknown stream: %p", (void *) strm);
   return p;
 }
 
@@ -108,7 +111,7 @@ static void end_stream_or_die (z_streamp strm)
     HASH_DELETE (hh, streams, p);
   pthread_mutex_unlock (&mutex);
   if (!p)
-    die ("unknown stream: %p", strm);
+    die ("unknown stream: %p", (void *) strm);
   close_or_die (p->ifd);
   close_or_die (p->ofd);
   free (p);
@@ -135,7 +138,7 @@ static void *dlsym_or_die (const char *name)
   return sym;
 }
 
-#define INIT_INTERPOSE(x) ORIG (x) = dlsym_or_die (#x)
+#define INIT_INTERPOSE(x) ORIG (x) = (typeof (&x)) dlsym_or_die (#x)
 
 __attribute__((constructor))
 static void init ()
@@ -150,6 +153,41 @@ static void init ()
   INIT_INTERPOSE (inflateEnd);
 }
 #endif
+
+struct call {
+  struct hash_entry *stream;
+  z_const Bytef *next_in;
+  uInt avail_in;
+  Bytef *next_out;
+  uInt avail_out;
+  int flush;
+};
+
+static void before_call (struct call *call, z_streamp strm, int flush) {
+  call->stream = find_stream_or_die (strm);
+  call->next_in = strm->next_in;
+  call->avail_in = strm->avail_in;
+  call->next_out = strm->next_out;
+  call->avail_out = strm->avail_out;
+  call->flush = flush;
+}
+
+static void after_call (struct call *call) {
+  uInt consumed_in;
+  uInt consumed_out;
+  char buf[256];
+  size_t n;
+
+  consumed_in = call->stream->strm->next_in - call->next_in;
+  write_or_die (call->stream->ifd, call->next_in, consumed_in);
+  consumed_out = call->stream->strm->next_out - call->next_out;
+  write_or_die (call->stream->ofd, call->next_out, consumed_out);
+  n = snprintf(buf, sizeof (buf), "%p %u %p %u %i %u %u\n",
+               (z_const void *) call->next_in, call->avail_in,
+               (void *) call->next_out, call->avail_out,
+               call->flush, consumed_in, consumed_out);
+  write_or_die (call->stream->mfd, buf, n);
+}
 
 extern int REPLACEMENT (deflateInit_) (z_streamp strm, int level,
                                        const char *version, int stream_size)
@@ -180,17 +218,12 @@ extern int REPLACEMENT (deflateInit2_) (z_streamp strm, int level, int method,
 
 extern int REPLACEMENT (deflate) (z_streamp strm, int flush)
 {
-  struct hash_entry *stream;
-  z_const Bytef *next_in;
-  Bytef *next_out;
+  struct call call;
   int err;
 
-  stream = find_stream_or_die (strm);
-  next_in = strm->next_in;
-  next_out = strm->next_out;
+  before_call (&call, strm, flush);
   err = ORIG (deflate) (strm, flush);
-  write_or_die (stream->ifd, next_in, strm->next_in - next_in);
-  write_or_die (stream->ofd, next_out, strm->next_out - next_out);
+  after_call (&call);
   return err;
 }
 
@@ -225,17 +258,12 @@ extern int REPLACEMENT (inflateInit2_) (z_streamp strm, int windowBits,
 
 extern int REPLACEMENT (inflate) (z_streamp strm, int flush)
 {
-  struct hash_entry *stream;
-  z_const Bytef *next_in;
-  Bytef *next_out;
+  struct call call;
   int err;
 
-  stream = find_stream_or_die (strm);
-  next_in = strm->next_in;
-  next_out = strm->next_out;
+  before_call (&call, strm, flush);
   err = ORIG (inflate) (strm, flush);
-  write_or_die (stream->ifd, next_in, strm->next_in - next_in);
-  write_or_die (stream->ofd, next_out, strm->next_out - next_out);
+  after_call (&call);
   return err;
 }
 
@@ -246,12 +274,12 @@ extern int REPLACEMENT (inflateEnd) (z_streamp strm)
 }
 
 #ifdef __APPLE__
-DYLD_INTERPOSE (REPLACEMENT (deflateInit_), deflateInit_);
-DYLD_INTERPOSE (REPLACEMENT (deflateInit2_), deflateInit2_);
-DYLD_INTERPOSE (REPLACEMENT (deflate), deflate);
-DYLD_INTERPOSE (REPLACEMENT (deflateEnd), deflateEnd);
-DYLD_INTERPOSE (REPLACEMENT (inflateInit_), inflateInit_);
-DYLD_INTERPOSE (REPLACEMENT (inflateInit2_), inflateInit2_);
-DYLD_INTERPOSE (REPLACEMENT (inflate), inflate);
-DYLD_INTERPOSE (REPLACEMENT (inflateEnd), inflateEnd);
+DYLD_INTERPOSE (REPLACEMENT (deflateInit_), deflateInit_)
+DYLD_INTERPOSE (REPLACEMENT (deflateInit2_), deflateInit2_)
+DYLD_INTERPOSE (REPLACEMENT (deflate), deflate)
+DYLD_INTERPOSE (REPLACEMENT (deflateEnd), deflateEnd)
+DYLD_INTERPOSE (REPLACEMENT (inflateInit_), inflateInit_)
+DYLD_INTERPOSE (REPLACEMENT (inflateInit2_), inflateInit2_)
+DYLD_INTERPOSE (REPLACEMENT (inflate), inflate)
+DYLD_INTERPOSE (REPLACEMENT (inflateEnd), inflateEnd)
 #endif
