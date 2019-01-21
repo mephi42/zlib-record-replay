@@ -115,18 +115,15 @@ static void end_stream_or_die (z_streamp strm)
 }
 
 #ifndef __APPLE__
-typedef int (*deflateInit_t) (z_streamp strm, int level,
-                              const char *version, int stream_size);
-typedef int (*deflateInit2_t) (z_streamp strm, int level, int method,
-                               int windowBits, int memLevel,
-                               int strategy, const char *version,
-                               int stream_size);
-typedef int (*deflate_t) (z_streamp strm, int flush);
-typedef int (*deflateEnd_t) (z_streamp strm);
-static deflateInit_t ORIG (deflateInit_);
-static deflateInit2_t ORIG (deflateInit2_);
-static deflate_t ORIG (deflate);
-static deflateEnd_t ORIG (deflateEnd);
+#define DEFINE_INTERPOSE(x) static typeof (&x) ORIG (x)
+DEFINE_INTERPOSE (deflateInit_);
+DEFINE_INTERPOSE (deflateInit2_);
+DEFINE_INTERPOSE (deflate);
+DEFINE_INTERPOSE (deflateEnd);
+DEFINE_INTERPOSE (inflateInit_);
+DEFINE_INTERPOSE (inflateInit2_);
+DEFINE_INTERPOSE (inflate);
+DEFINE_INTERPOSE (inflateEnd);
 
 static void *dlsym_or_die (const char *name)
 {
@@ -138,13 +135,19 @@ static void *dlsym_or_die (const char *name)
   return sym;
 }
 
+#define INIT_INTERPOSE(x) ORIG (x) = dlsym_or_die (#x)
+
 __attribute__((constructor))
 static void init ()
 {
-  ORIG (deflateInit_) = (deflateInit_t) dlsym_or_die ("deflateInit_");
-  ORIG (deflateInit2_) = (deflateInit2_t) dlsym_or_die ("deflateInit2_");
-  ORIG (deflate) = (deflate_t) dlsym_or_die ("deflate");
-  ORIG (deflateEnd) = (deflateEnd_t) dlsym_or_die ("deflateEnd");
+  INIT_INTERPOSE (deflateInit_);
+  INIT_INTERPOSE (deflateInit2_);
+  INIT_INTERPOSE (deflate);
+  INIT_INTERPOSE (deflateEnd);
+  INIT_INTERPOSE (inflateInit_);
+  INIT_INTERPOSE (inflateInit2_);
+  INIT_INTERPOSE (inflate);
+  INIT_INTERPOSE (inflateEnd);
 }
 #endif
 
@@ -153,7 +156,7 @@ extern int REPLACEMENT (deflateInit_) (z_streamp strm, int level,
 {
   int err;
 
-  err = ORIG(deflateInit_) (strm, level, version, stream_size);
+  err = ORIG (deflateInit_) (strm, level, version, stream_size);
   if (err == Z_OK)
     add_stream_or_die (strm, "deflate");
   return err;
@@ -166,10 +169,10 @@ extern int REPLACEMENT (deflateInit2_) (z_streamp strm, int level, int method,
 {
   int err;
 
-  err = ORIG(deflateInit2_) (strm, level, method,
-                             windowBits, memLevel,
-                             strategy, version,
-                             stream_size);
+  err = ORIG (deflateInit2_) (strm, level, method,
+                              windowBits, memLevel,
+                              strategy, version,
+                              stream_size);
   if (err == Z_OK)
     add_stream_or_die (strm, "deflate");
   return err;
@@ -185,7 +188,7 @@ extern int REPLACEMENT (deflate) (z_streamp strm, int flush)
   stream = find_stream_or_die (strm);
   next_in = strm->next_in;
   next_out = strm->next_out;
-  err = ORIG(deflate) (strm, flush);
+  err = ORIG (deflate) (strm, flush);
   write_or_die (stream->ifd, next_in, strm->next_in - next_in);
   write_or_die (stream->ofd, next_out, strm->next_out - next_out);
   return err;
@@ -194,7 +197,52 @@ extern int REPLACEMENT (deflate) (z_streamp strm, int flush)
 extern int REPLACEMENT (deflateEnd) (z_streamp strm)
 {
   end_stream_or_die (strm);
-  return ORIG(deflateEnd) (strm);
+  return ORIG (deflateEnd) (strm);
+}
+
+extern int REPLACEMENT (inflateInit_) (z_streamp strm,
+                                       const char *version, int stream_size)
+{
+  int err;
+
+  err = ORIG (inflateInit_) (strm, version, stream_size);
+  if (err == Z_OK)
+    add_stream_or_die (strm, "inflate");
+  return err;
+}
+
+extern int REPLACEMENT (inflateInit2_) (z_streamp strm, int windowBits,
+                                        const char *version, int stream_size)
+{
+  int err;
+
+  err = ORIG (inflateInit2_) (strm, windowBits,
+                              version, stream_size);
+  if (err == Z_OK)
+    add_stream_or_die (strm, "inflate");
+  return err;
+}
+
+extern int REPLACEMENT (inflate) (z_streamp strm, int flush)
+{
+  struct hash_entry *stream;
+  z_const Bytef *next_in;
+  Bytef *next_out;
+  int err;
+
+  stream = find_stream_or_die (strm);
+  next_in = strm->next_in;
+  next_out = strm->next_out;
+  err = ORIG (inflate) (strm, flush);
+  write_or_die (stream->ifd, next_in, strm->next_in - next_in);
+  write_or_die (stream->ofd, next_out, strm->next_out - next_out);
+  return err;
+}
+
+extern int REPLACEMENT (inflateEnd) (z_streamp strm)
+{
+  end_stream_or_die (strm);
+  return ORIG (inflateEnd) (strm);
 }
 
 #ifdef __APPLE__
@@ -202,4 +250,8 @@ DYLD_INTERPOSE (REPLACEMENT (deflateInit_), deflateInit_);
 DYLD_INTERPOSE (REPLACEMENT (deflateInit2_), deflateInit2_);
 DYLD_INTERPOSE (REPLACEMENT (deflate), deflate);
 DYLD_INTERPOSE (REPLACEMENT (deflateEnd), deflateEnd);
+DYLD_INTERPOSE (REPLACEMENT (inflateInit_), inflateInit_);
+DYLD_INTERPOSE (REPLACEMENT (inflateInit2_), inflateInit2_);
+DYLD_INTERPOSE (REPLACEMENT (inflate), inflate);
+DYLD_INTERPOSE (REPLACEMENT (inflateEnd), inflateEnd);
 #endif
