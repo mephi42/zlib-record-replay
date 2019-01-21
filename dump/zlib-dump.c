@@ -19,7 +19,7 @@
 #endif
 
 #define die(fmt, ...) do { \
-  fprintf (stderr, "zlib-dumper: " fmt "\n", ##__VA_ARGS__); \
+  fprintf (stderr, "zlib-dump: " fmt "\n", ##__VA_ARGS__); \
   abort (); \
 } while (0)
 
@@ -42,6 +42,7 @@ static void write_or_die (int fd, const void *buf, size_t count)
       ret = write (fd, buf, count);
       if (ret <= 0)
         die ("write() failed");
+      buf = (const char *) buf + ret;
       count -= ret;
     }
 }
@@ -81,7 +82,7 @@ static struct hash_entry *add_stream_or_die (z_streamp strm, const char *kind)
   p->ifd = creat_or_die (path);
   snprintf(path, sizeof (path), "%s.%lu.%lu.out", kind, pid, counter);
   p->ofd = creat_or_die (path);
-  snprintf(path, sizeof (path), "%s.%lu.%lu.meta", kind, pid, counter);
+  snprintf(path, sizeof (path), "%s.%lu.%lu", kind, pid, counter);
   p->mfd = creat_or_die (path);
   pthread_mutex_lock (&mutex);
   HASH_ADD (hh, streams, strm, sizeof (z_streamp), p);
@@ -163,7 +164,8 @@ struct call {
   int flush;
 };
 
-static void before_call (struct call *call, z_streamp strm, int flush) {
+static void before_call (struct call *call, z_streamp strm, int flush)
+{
   call->stream = find_stream_or_die (strm);
   call->next_in = strm->next_in;
   call->avail_in = strm->avail_in;
@@ -172,47 +174,65 @@ static void before_call (struct call *call, z_streamp strm, int flush) {
   call->flush = flush;
 }
 
-static void after_call (struct call *call) {
+static void after_call (struct call *call)
+{
   uInt consumed_in;
   uInt consumed_out;
-  char buf[256];
+  char line[256];
   size_t n;
 
   consumed_in = call->stream->strm->next_in - call->next_in;
   write_or_die (call->stream->ifd, call->next_in, consumed_in);
   consumed_out = call->stream->strm->next_out - call->next_out;
   write_or_die (call->stream->ofd, call->next_out, consumed_out);
-  n = snprintf(buf, sizeof (buf), "%p %u %p %u %i %u %u\n",
+  n = snprintf(line, sizeof (line), "%p %u %p %u %i %u %u\n",
                (z_const void *) call->next_in, call->avail_in,
                (void *) call->next_out, call->avail_out,
                call->flush, consumed_in, consumed_out);
-  write_or_die (call->stream->mfd, buf, n);
+  write_or_die (call->stream->mfd, line, n);
 }
 
 extern int REPLACEMENT (deflateInit_) (z_streamp strm, int level,
                                        const char *version, int stream_size)
 {
   int err;
+  struct hash_entry *stream;
+  char line[256];
+  size_t n;
 
   err = ORIG (deflateInit_) (strm, level, version, stream_size);
   if (err == Z_OK)
-    add_stream_or_die (strm, "deflate");
+    {
+      stream = add_stream_or_die (strm, "deflate");
+      n = snprintf(line, sizeof (line), "1 %i\n", level);
+      write_or_die (stream->mfd, line, n);
+    }
   return err;
 }
 
 extern int REPLACEMENT (deflateInit2_) (z_streamp strm, int level, int method,
-                                        int windowBits, int memLevel,
+                                        int window_bits, int mem_level,
                                         int strategy, const char *version,
                                         int stream_size)
 {
   int err;
+  struct hash_entry *stream;
+  char line[256];
+  size_t n;
 
   err = ORIG (deflateInit2_) (strm, level, method,
-                              windowBits, memLevel,
+                              window_bits, mem_level,
                               strategy, version,
                               stream_size);
   if (err == Z_OK)
-    add_stream_or_die (strm, "deflate");
+    {
+      stream = add_stream_or_die (strm, "deflate");
+      n = snprintf(line, sizeof (line), "2 %i %i %i %i %i\n",
+                   level, method,
+                   window_bits, mem_level,
+                   strategy);
+      write_or_die (stream->mfd, line, n);
+    }
   return err;
 }
 
@@ -244,12 +264,12 @@ extern int REPLACEMENT (inflateInit_) (z_streamp strm,
   return err;
 }
 
-extern int REPLACEMENT (inflateInit2_) (z_streamp strm, int windowBits,
+extern int REPLACEMENT (inflateInit2_) (z_streamp strm, int window_bits,
                                         const char *version, int stream_size)
 {
   int err;
 
-  err = ORIG (inflateInit2_) (strm, windowBits,
+  err = ORIG (inflateInit2_) (strm, window_bits,
                               version, stream_size);
   if (err == Z_OK)
     add_stream_or_die (strm, "inflate");
