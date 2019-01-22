@@ -19,7 +19,7 @@
 #endif
 
 #define die(fmt, ...) do { \
-  fprintf (stderr, "zlib-dump: " fmt "\n", ##__VA_ARGS__); \
+  fprintf (stderr, "zlib-record: " fmt "\n", ##__VA_ARGS__); \
   abort (); \
 } while (0)
 
@@ -45,6 +45,9 @@ static void write_or_die (int fd, const void *buf, size_t count)
       buf = (const char *) buf + ret;
       count -= ret;
     }
+  ret = fsync (fd);
+  if (ret < 0)
+    die ("fsync() failed");
 }
 
 static void close_or_die (int fd)

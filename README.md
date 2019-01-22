@@ -1,9 +1,9 @@
-# zlib-dump
+# zlib-record
 
-Intercept and dump zlib calls.
+Intercept and record zlib calls.
 
 ## Usage
 
-```zlib-dump utility [argument ...]```
+```zlib-record utility [argument ...]```
 
 ```zlib-replay deflate.X.Y```
