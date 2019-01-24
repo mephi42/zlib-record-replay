@@ -7,7 +7,8 @@
 #define PAGE_SIZE 0x1000
 #define PAGE_OFFSET_MASK 0xfff
 
-static int replay_init (z_streamp strm, FILE *mfp, const char *argv0)
+static int replay_init (z_streamp strm, char *kind,
+                        FILE *mfp, const char *argv0)
 {
   int version;
   int level;
@@ -18,12 +19,17 @@ static int replay_init (z_streamp strm, FILE *mfp, const char *argv0)
   int err;
 
   memset(strm, 0, sizeof (*strm));
+  if (fscanf (mfp, "%c", kind) != 1)
+    {
+      fprintf (stderr, "%s: could not read stream type\n", argv0);
+      return EXIT_FAILURE;
+    }
   if (fscanf (mfp, "%i", &version) != 1)
     {
       fprintf (stderr, "%s: could not read init version\n", argv0);
       return EXIT_FAILURE;
     }
-  if (version == 1)
+  if (*kind == 'd' && version == 1)
     {
       if (fscanf (mfp, "%i", &level) != 1)
         {
@@ -32,7 +38,7 @@ static int replay_init (z_streamp strm, FILE *mfp, const char *argv0)
         }
       err = deflateInit (strm, level);
     }
-  else
+  else if (*kind == 'd' && version == 2)
     {
       if (fscanf (mfp, "%i %i %i %i %i",
                   &level, &method, &window_bits, &mem_level, &strategy) != 5)
@@ -43,6 +49,24 @@ static int replay_init (z_streamp strm, FILE *mfp, const char *argv0)
       err = deflateInit2 (strm, level, method,
                           window_bits, mem_level,
                           strategy);
+    }
+  else if (*kind == 'i' && version == 1)
+    {
+      err = inflateInit (strm);
+    }
+  else if (*kind == 'i' && version == 2)
+    {
+      if (fscanf (mfp, "%i", &window_bits) != 1)
+        {
+          fprintf (stderr, "%s: could not read inflateInit2 arguments\n", argv0);
+          return EXIT_FAILURE;
+        }
+      err = inflateInit2 (strm, window_bits);
+    }
+  else
+    {
+      fprintf (stderr, "%s: unsupported stream kind and version\n", argv0);
+      err = Z_STREAM_ERROR;
     }
   return err == Z_OK ? EXIT_SUCCESS : EXIT_FAILURE;
 }
@@ -78,8 +102,8 @@ static ssize_t fread_all (void *buf, size_t count, FILE *stream)
   return count - n;
 }
 
-static int replay_deflate (z_streamp strm, FILE *mfp, FILE *ifp, FILE *ofp,
-                           int *eof, const char *argv0)
+static int replay (z_streamp strm, char kind, FILE *mfp, FILE *ifp, FILE *ofp,
+                   int *eof, const char *argv0)
 {
   unsigned long next_in;
   unsigned int avail_in;
@@ -145,11 +169,12 @@ static int replay_deflate (z_streamp strm, FILE *mfp, FILE *ifp, FILE *ofp,
       fprintf (stderr, "%s: could not seek in the output file\n", argv0);
       goto free_buf;
     }
-  err = deflate (strm, flush);
+  err = kind == 'd' ? deflate (strm, flush) : inflate (strm, flush);
   consumed_in = avail_in - strm->avail_in;
   consumed_out = avail_out - strm->avail_out;
   if (err != Z_OK && err != Z_STREAM_END)
-    fprintf (stderr, "%s: deflate failed\n", argv0);
+    fprintf (stderr, "%s: %s failed\n",
+             kind == 'd' ? "deflate" : "inflate", argv0);
   else if (consumed_in != exp_consumed_in)
     fprintf (stderr, "%s: consumed_in mismatch (%u vs %u)\n",
              argv0, consumed_in, exp_consumed_in);
@@ -172,8 +197,10 @@ int main (int argc, char **argv)
   FILE *ifp;
   FILE *ofp;
   z_stream strm;
+  char kind;
   int eof = 0;
   int ret = EXIT_FAILURE;
+  int err;
 
   if (argc != 2)
     {
@@ -197,20 +224,27 @@ int main (int argc, char **argv)
       fprintf (stderr, "%s: could not open %s\n", argv[0], path);
       goto close_ifp;
     }
-  if (replay_init (&strm, mfp, argv[0]) != EXIT_SUCCESS)
+  if (replay_init (&strm, &kind, mfp, argv[0]) != EXIT_SUCCESS)
     {
       fprintf (stderr, "%s: init failed\n", argv[0]);
       goto close_ofp;
     }
   while (!eof)
     {
-      if (replay_deflate (&strm, mfp, ifp, ofp, &eof, argv[0]) != EXIT_SUCCESS)
+      if (replay (&strm, kind, mfp, ifp, ofp, &eof, argv[0]) != EXIT_SUCCESS)
         {
-          fprintf (stderr, "%s: deflate failed at offset "
+          fprintf (stderr, "%s: %s failed at offset "
                            "uncompressed:%lu compressed:%lu\n",
-                   argv[0], strm.total_in, strm.total_out);
+                   argv[0], kind == 'd' ? "deflate" : "inflate",
+                   strm.total_in, strm.total_out);
           goto close_ofp;
         }
+    }
+  err = kind == 'd' ? deflateEnd (&strm) : inflateEnd (&strm);
+  if (err != Z_OK)
+    {
+      fprintf (stderr, "%s: end failed\n", argv[0]);
+      goto close_ofp;
     }
   ret = EXIT_SUCCESS;
 close_ofp:

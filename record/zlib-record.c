@@ -207,7 +207,7 @@ extern int REPLACEMENT (deflateInit_) (z_streamp strm, int level,
   if (err == Z_OK)
     {
       stream = add_stream_or_die (strm, "deflate");
-      n = snprintf(line, sizeof (line), "1 %i\n", level);
+      n = snprintf(line, sizeof (line), "d 1 %i\n", level);
       write_or_die (stream->mfd, line, n);
     }
   return err;
@@ -230,7 +230,7 @@ extern int REPLACEMENT (deflateInit2_) (z_streamp strm, int level, int method,
   if (err == Z_OK)
     {
       stream = add_stream_or_die (strm, "deflate");
-      n = snprintf(line, sizeof (line), "2 %i %i %i %i %i\n",
+      n = snprintf(line, sizeof (line), "d 2 %i %i %i %i %i\n",
                    level, method,
                    window_bits, mem_level,
                    strategy);
@@ -260,10 +260,17 @@ extern int REPLACEMENT (inflateInit_) (z_streamp strm,
                                        const char *version, int stream_size)
 {
   int err;
+  struct hash_entry *stream;
+  char line[256];
+  size_t n;
 
   err = ORIG (inflateInit_) (strm, version, stream_size);
   if (err == Z_OK)
-    add_stream_or_die (strm, "inflate");
+    {
+      stream = add_stream_or_die (strm, "inflate");
+      n = snprintf(line, sizeof (line), "i 1\n");
+      write_or_die (stream->mfd, line, n);
+    }
   return err;
 }
 
@@ -271,11 +278,18 @@ extern int REPLACEMENT (inflateInit2_) (z_streamp strm, int window_bits,
                                         const char *version, int stream_size)
 {
   int err;
+  struct hash_entry *stream;
+  char line[256];
+  size_t n;
 
   err = ORIG (inflateInit2_) (strm, window_bits,
                               version, stream_size);
   if (err == Z_OK)
-    add_stream_or_die (strm, "inflate");
+    {
+      stream = add_stream_or_die (strm, "inflate");
+      n = snprintf(line, sizeof (line), "i 2 %i\n", window_bits);
+      write_or_die (stream->mfd, line, n);
+    }
   return err;
 }
 
