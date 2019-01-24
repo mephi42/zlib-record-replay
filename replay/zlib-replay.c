@@ -7,6 +7,11 @@
 #define PAGE_SIZE 0x1000
 #define PAGE_OFFSET_MASK 0xfff
 
+static const char *stream_kind (char kind)
+{
+  return kind == 'd' ? "deflate" : "inflate";
+}
+
 static int replay_init (z_streamp strm, char *kind,
                         FILE *mfp, const char *argv0)
 {
@@ -174,7 +179,7 @@ static int replay (z_streamp strm, char kind, FILE *mfp, FILE *ifp, FILE *ofp,
   consumed_out = avail_out - strm->avail_out;
   if (err != Z_OK && err != Z_STREAM_END)
     fprintf (stderr, "%s: %s failed\n",
-             kind == 'd' ? "deflate" : "inflate", argv0);
+             argv0, stream_kind (kind));
   else if (consumed_in != exp_consumed_in)
     fprintf (stderr, "%s: consumed_in mismatch (%u vs %u)\n",
              argv0, consumed_in, exp_consumed_in);
@@ -235,7 +240,7 @@ int main (int argc, char **argv)
         {
           fprintf (stderr, "%s: %s failed at offset "
                            "uncompressed:%lu compressed:%lu\n",
-                   argv[0], kind == 'd' ? "deflate" : "inflate",
+                   argv[0], stream_kind (kind),
                    strm.total_in, strm.total_out);
           goto close_ofp;
         }
@@ -243,7 +248,7 @@ int main (int argc, char **argv)
   err = kind == 'd' ? deflateEnd (&strm) : inflateEnd (&strm);
   if (err != Z_OK)
     {
-      fprintf (stderr, "%s: end failed\n", argv[0]);
+      fprintf (stderr, "%s: %sEnd failed\n", argv[0], stream_kind (kind));
       goto close_ofp;
     }
   ret = EXIT_SUCCESS;
