@@ -177,7 +177,9 @@ static int replay (z_streamp strm, char kind, FILE *mfp, FILE *ifp, FILE *ofp,
   err = kind == 'd' ? deflate (strm, flush) : inflate (strm, flush);
   consumed_in = avail_in - strm->avail_in;
   consumed_out = avail_out - strm->avail_out;
-  if (err != Z_OK && err != Z_STREAM_END)
+  if (err != Z_OK && err != Z_STREAM_END &&
+      !(kind == 'i' && consumed_in == 0 && consumed_out == 0 &&
+        err == Z_BUF_ERROR))
     fprintf (stderr, "%s: %s failed\n",
              argv0, stream_kind (kind));
   else if (consumed_in != exp_consumed_in)
