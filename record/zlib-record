@@ -14,11 +14,16 @@ Darwin)
     echo "Unsupported OS: $os" >&2
     exit 1
 esac
-interceptor=$(dirname "$0")/libz-record.$ext
+readlink=$(command -v greadlink || command -v readlink)
+if [ $? -ne 0 ]; then
+    echo "Could not find (g)readlink" >&2
+    exit 1
+fi
+interceptor=$(dirname "$("$readlink" -f "$0")")/libz-record.$ext
 if [ ! -e "$interceptor" ]; then
     echo "$interceptor does not exist" >&2
     exit 1
 fi
 eval "$var=\${$var:+\$$var:}$interceptor"
 eval export $var
-exec "$@"
+exec -- "$@"
