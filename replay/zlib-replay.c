@@ -48,7 +48,8 @@ static int replay_init (z_streamp strm, char *kind,
       if (fscanf (mfp, "%i %i %i %i %i",
                   &level, &method, &window_bits, &mem_level, &strategy) != 5)
         {
-          fprintf (stderr, "%s: could not read deflateInit2 arguments\n", argv0);
+          fprintf (stderr, "%s: could not read deflateInit2 arguments\n",
+                   argv0);
           return EXIT_FAILURE;
         }
       err = deflateInit2 (strm, level, method,
@@ -63,7 +64,8 @@ static int replay_init (z_streamp strm, char *kind,
     {
       if (fscanf (mfp, "%i", &window_bits) != 1)
         {
-          fprintf (stderr, "%s: could not read inflateInit2 arguments\n", argv0);
+          fprintf (stderr, "%s: could not read inflateInit2 arguments\n",
+                   argv0);
           return EXIT_FAILURE;
         }
       err = inflateInit2 (strm, window_bits);
@@ -121,21 +123,22 @@ static int replay (z_streamp strm, char kind, FILE *mfp, FILE *ifp, FILE *ofp,
   void *exp_buf;
   ssize_t valid_out;
   int err;
+  int z_err;
   unsigned int consumed_in;
   unsigned int consumed_out;
   int ret = EXIT_FAILURE;
 
-  err = fscanf (mfp, "%lx %u %lx %u %i %u %u",
-                &next_in, &avail_in, &next_out, &avail_out, &flush,
-                &exp_consumed_in, &exp_consumed_out);
+  err = fscanf (mfp, "%lx %u %lx %u %i",
+                &next_in, &avail_in, &next_out, &avail_out, &flush);
   if (err == EOF)
     {
       *eof = 1;
       return EXIT_SUCCESS;
     }
-  if (err != 7)
+  if (err != 5)
     {
-      fprintf (stderr, "%s: could not read deflate arguments\n", argv0);
+      fprintf (stderr, "%s: could not read %s arguments\n",
+               argv0, stream_kind (kind));
       return EXIT_FAILURE;
     }
   buf = malloc (avail_in + PAGE_SIZE + avail_out + PAGE_SIZE + avail_out);
@@ -157,11 +160,6 @@ static int replay (z_streamp strm, char kind, FILE *mfp, FILE *ifp, FILE *ofp,
                argv0, avail_in);
       goto free_buf;
     }
-  if (fseek (ifp, (long) (int) (exp_consumed_in - avail_in), SEEK_CUR) == -1)
-    {
-      fprintf (stderr, "%s: could not seek in the input file\n", argv0);
-      goto free_buf;
-    }
   valid_out = fread_all (exp_buf, avail_out, ofp);
   if (valid_out == -1)
     {
@@ -169,24 +167,36 @@ static int replay (z_streamp strm, char kind, FILE *mfp, FILE *ifp, FILE *ofp,
                argv0, avail_out);
       goto free_buf;
     }
+  z_err = kind == 'd' ? deflate (strm, flush) : inflate (strm, flush);
+  err = fscanf (mfp, "%u %u", &exp_consumed_in, &exp_consumed_out);
+  if (err != 2)
+    {
+      fprintf (stderr, "%s: could not read %s results\n",
+               argv0, stream_kind (kind));
+      return EXIT_FAILURE;
+    }
+  if (fseek (ifp, (long) (int) (exp_consumed_in - avail_in), SEEK_CUR) == -1)
+    {
+      fprintf (stderr, "%s: could not seek in the input file\n", argv0);
+      goto free_buf;
+    }
   if (fseek (ofp, (long) (int) (exp_consumed_out - valid_out), SEEK_CUR) == -1)
     {
       fprintf (stderr, "%s: could not seek in the output file\n", argv0);
       goto free_buf;
     }
-  err = kind == 'd' ? deflate (strm, flush) : inflate (strm, flush);
   consumed_in = avail_in - strm->avail_in;
   consumed_out = avail_out - strm->avail_out;
-  if (err != Z_OK && err != Z_STREAM_END &&
+  if (z_err != Z_OK && z_err != Z_STREAM_END &&
       !(kind == 'i' && consumed_in == 0 && consumed_out == 0 &&
-        err == Z_BUF_ERROR))
+        z_err == Z_BUF_ERROR))
     fprintf (stderr, "%s: %s failed\n",
              argv0, stream_kind (kind));
   else if (consumed_in != exp_consumed_in)
-    fprintf (stderr, "%s: consumed_in mismatch (%u vs %u)\n",
+    fprintf (stderr, "%s: consumed_in mismatch (actual: %u, expected: %u)\n",
              argv0, consumed_in, exp_consumed_in);
   else if (consumed_out != exp_consumed_out)
-    fprintf (stderr, "%s: consumed_out mismatch (%u vs %u)\n",
+    fprintf (stderr, "%s: consumed_out mismatch (actual: %u expected:%u)\n",
              argv0, consumed_out, exp_consumed_out);
   else if (memcmp (strm->next_out - consumed_out, exp_buf, consumed_out) != 0)
     fprintf (stderr, "%s: compressed data mismatch\n", argv0);

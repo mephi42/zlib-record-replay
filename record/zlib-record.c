@@ -161,20 +161,22 @@ static void init ()
 struct call {
   struct hash_entry *stream;
   z_const Bytef *next_in;
-  uInt avail_in;
   Bytef *next_out;
-  uInt avail_out;
-  int flush;
 };
 
 static void before_call (struct call *call, z_streamp strm, int flush)
 {
+  char line[256];
+  size_t n;
+
   call->stream = find_stream_or_die (strm);
+  n = snprintf(line, sizeof (line), "%p %u %p %u %i\n",
+               (z_const void *) strm->next_in, strm->avail_in,
+               (void *) strm->next_out, strm->avail_out,
+               flush);
+  write_or_die (call->stream->mfd, line, n);
   call->next_in = strm->next_in;
-  call->avail_in = strm->avail_in;
   call->next_out = strm->next_out;
-  call->avail_out = strm->avail_out;
-  call->flush = flush;
 }
 
 static void after_call (struct call *call)
@@ -188,10 +190,8 @@ static void after_call (struct call *call)
   write_or_die (call->stream->ifd, call->next_in, consumed_in);
   consumed_out = call->stream->strm->next_out - call->next_out;
   write_or_die (call->stream->ofd, call->next_out, consumed_out);
-  n = snprintf(line, sizeof (line), "%p %u %p %u %i %u %u\n",
-               (z_const void *) call->next_in, call->avail_in,
-               (void *) call->next_out, call->avail_out,
-               call->flush, consumed_in, consumed_out);
+  n = snprintf(line, sizeof (line), "%u %u\n",
+               consumed_in, consumed_out);
   write_or_die (call->stream->mfd, line, n);
 }
 
