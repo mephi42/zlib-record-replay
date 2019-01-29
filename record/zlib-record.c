@@ -105,7 +105,7 @@ static struct hash_entry *find_stream_or_die (z_streamp strm)
   return p;
 }
 
-static void end_stream_or_die (z_streamp strm)
+static void end_stream_or_die (z_streamp strm, const char *kind)
 {
   struct hash_entry *p;
 
@@ -115,7 +115,7 @@ static void end_stream_or_die (z_streamp strm)
     HASH_DELETE (hh, streams, p);
   pthread_mutex_unlock (&mutex);
   if (!p)
-    die ("unknown stream: %p", (void *) strm);
+    die ("unknown %s stream: %p", kind, (void *) strm);
   close_or_die (p->ifd);
   close_or_die (p->ofd);
   free (p);
@@ -195,6 +195,8 @@ static void after_call (struct call *call)
   write_or_die (call->stream->mfd, line, n);
 }
 
+static _Thread_local int in_deflateInit_;
+
 extern int REPLACEMENT (deflateInit_) (z_streamp strm, int level,
                                        const char *version, int stream_size)
 {
@@ -203,7 +205,9 @@ extern int REPLACEMENT (deflateInit_) (z_streamp strm, int level,
   char line[256];
   size_t n;
 
+  in_deflateInit_ = 1;
   err = ORIG (deflateInit_) (strm, level, version, stream_size);
+  in_deflateInit_ = 0;
   if (err == Z_OK)
     {
       stream = add_stream_or_die (strm, "deflate");
@@ -227,7 +231,7 @@ extern int REPLACEMENT (deflateInit2_) (z_streamp strm, int level, int method,
                               window_bits, mem_level,
                               strategy, version,
                               stream_size);
-  if (err == Z_OK)
+  if (!in_deflateInit_ && err == Z_OK)
     {
       stream = add_stream_or_die (strm, "deflate");
       n = snprintf(line, sizeof (line), "d 2 %i %i %i %i %i\n",
@@ -252,9 +256,11 @@ extern int REPLACEMENT (deflate) (z_streamp strm, int flush)
 
 extern int REPLACEMENT (deflateEnd) (z_streamp strm)
 {
-  end_stream_or_die (strm);
+  end_stream_or_die (strm, "deflate");
   return ORIG (deflateEnd) (strm);
 }
+
+static _Thread_local int in_inflateInit_;
 
 extern int REPLACEMENT (inflateInit_) (z_streamp strm,
                                        const char *version, int stream_size)
@@ -264,7 +270,9 @@ extern int REPLACEMENT (inflateInit_) (z_streamp strm,
   char line[256];
   size_t n;
 
+  in_inflateInit_ = 1;
   err = ORIG (inflateInit_) (strm, version, stream_size);
+  in_inflateInit_ = 0;
   if (err == Z_OK)
     {
       stream = add_stream_or_die (strm, "inflate");
@@ -284,7 +292,7 @@ extern int REPLACEMENT (inflateInit2_) (z_streamp strm, int window_bits,
 
   err = ORIG (inflateInit2_) (strm, window_bits,
                               version, stream_size);
-  if (err == Z_OK)
+  if (!in_inflateInit_ && err == Z_OK)
     {
       stream = add_stream_or_die (strm, "inflate");
       n = snprintf(line, sizeof (line), "i 2 %i\n", window_bits);
@@ -306,7 +314,7 @@ extern int REPLACEMENT (inflate) (z_streamp strm, int flush)
 
 extern int REPLACEMENT (inflateEnd) (z_streamp strm)
 {
-  end_stream_or_die (strm);
+  end_stream_or_die (strm, "inflate");
   return ORIG (inflateEnd) (strm);
 }
 
