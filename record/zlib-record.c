@@ -58,6 +58,7 @@ static void close_or_die (int fd)
 
 struct hash_entry {
   z_streamp strm;
+  unsigned long counter;
   int ifd;
   int ofd;
   int mfd;
@@ -70,7 +71,6 @@ static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static struct hash_entry *add_stream_or_die (z_streamp strm, const char *kind)
 {
-  unsigned long counter;
   unsigned long pid;
   char path[256];
   struct hash_entry *p;
@@ -80,12 +80,12 @@ static struct hash_entry *add_stream_or_die (z_streamp strm, const char *kind)
     die ("oom");
   p->strm = strm;
   pid = (unsigned long) getpid ();
-  counter = atomic_fetch_add(&streams_counter, 1);
-  snprintf(path, sizeof (path), "%s.%lu.%lu.in", kind, pid, counter);
+  p->counter = atomic_fetch_add(&streams_counter, 1);
+  snprintf(path, sizeof (path), "%s.%lu.%lu.in", kind, pid, p->counter);
   p->ifd = creat_or_die (path);
-  snprintf(path, sizeof (path), "%s.%lu.%lu.out", kind, pid, counter);
+  snprintf(path, sizeof (path), "%s.%lu.%lu.out", kind, pid, p->counter);
   p->ofd = creat_or_die (path);
-  snprintf(path, sizeof (path), "%s.%lu.%lu", kind, pid, counter);
+  snprintf(path, sizeof (path), "%s.%lu.%lu", kind, pid, p->counter);
   p->mfd = creat_or_die (path);
   pthread_mutex_lock (&mutex);
   HASH_ADD (hh, streams, strm, sizeof (z_streamp), p);
@@ -121,14 +121,37 @@ static void end_stream_or_die (z_streamp strm, const char *kind)
   free (p);
 }
 
+static void
+copy_stream_or_die (z_streamp dest, z_streamp source, const char *kind)
+{
+  struct hash_entry *dest_stream;
+  struct hash_entry *source_stream;
+  unsigned long pid;
+  unsigned long off;
+  char line[256];
+  size_t n;
+
+  source_stream = find_stream_or_die (source);
+  dest_stream = add_stream_or_die (dest, kind);
+  pid = (unsigned long) getpid ();
+  off = (unsigned long) lseek (source_stream->mfd, 0, SEEK_CUR);
+  if (off == -1UL)
+    die ("lseek() failed");
+  n = snprintf(line, sizeof (line), "%c c %s.%lu.%lu %lu\n",
+               kind[0], kind, pid, source_stream->counter, off);
+  write_or_die (dest_stream->mfd, line, n);
+}
+
 #ifndef __APPLE__
 #define DEFINE_INTERPOSE(x) static typeof (&x) ORIG (x)
 DEFINE_INTERPOSE (deflateInit_);
 DEFINE_INTERPOSE (deflateInit2_);
+DEFINE_INTERPOSE (deflateCopy);
 DEFINE_INTERPOSE (deflate);
 DEFINE_INTERPOSE (deflateEnd);
 DEFINE_INTERPOSE (inflateInit_);
 DEFINE_INTERPOSE (inflateInit2_);
+DEFINE_INTERPOSE (inflateCopy);
 DEFINE_INTERPOSE (inflate);
 DEFINE_INTERPOSE (inflateEnd);
 
@@ -149,12 +172,14 @@ static void init ()
 {
   INIT_INTERPOSE (deflateInit_);
   INIT_INTERPOSE (deflateInit2_);
+  INIT_INTERPOSE (deflateCopy);
   INIT_INTERPOSE (deflate);
   INIT_INTERPOSE (deflateEnd);
   INIT_INTERPOSE (inflateInit_);
   INIT_INTERPOSE (inflateInit2_);
   INIT_INTERPOSE (inflate);
   INIT_INTERPOSE (inflateEnd);
+  INIT_INTERPOSE (inflateCopy);
 }
 #endif
 
@@ -243,6 +268,16 @@ extern int REPLACEMENT (deflateInit2_) (z_streamp strm, int level, int method,
   return err;
 }
 
+extern int REPLACEMENT (deflateCopy) (z_streamp dest, z_streamp source)
+{
+  int err;
+
+  err = ORIG (deflateCopy) (dest, source);
+  if (err == Z_OK)
+    copy_stream_or_die (dest, source, "deflate");
+  return err;
+}
+
 extern int REPLACEMENT (deflate) (z_streamp strm, int flush)
 {
   struct call call;
@@ -301,6 +336,16 @@ extern int REPLACEMENT (inflateInit2_) (z_streamp strm, int window_bits,
   return err;
 }
 
+extern int REPLACEMENT (inflateCopy) (z_streamp dest, z_streamp source)
+{
+  int err;
+
+  err = ORIG (inflateCopy) (dest, source);
+  if (err == Z_OK)
+    copy_stream_or_die (dest, source, "inflate");
+  return err;
+}
+
 extern int REPLACEMENT (inflate) (z_streamp strm, int flush)
 {
   struct call call;
@@ -321,10 +366,12 @@ extern int REPLACEMENT (inflateEnd) (z_streamp strm)
 #ifdef __APPLE__
 DYLD_INTERPOSE (REPLACEMENT (deflateInit_), deflateInit_)
 DYLD_INTERPOSE (REPLACEMENT (deflateInit2_), deflateInit2_)
+DYLD_INTERPOSE (REPLACEMENT (deflateCopy), deflateCopy)
 DYLD_INTERPOSE (REPLACEMENT (deflate), deflate)
 DYLD_INTERPOSE (REPLACEMENT (deflateEnd), deflateEnd)
 DYLD_INTERPOSE (REPLACEMENT (inflateInit_), inflateInit_)
 DYLD_INTERPOSE (REPLACEMENT (inflateInit2_), inflateInit2_)
+DYLD_INTERPOSE (REPLACEMENT (inflateCopy), inflateCopy)
 DYLD_INTERPOSE (REPLACEMENT (inflate), inflate)
 DYLD_INTERPOSE (REPLACEMENT (inflateEnd), inflateEnd)
 #endif
