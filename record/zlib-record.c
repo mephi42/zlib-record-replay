@@ -217,7 +217,7 @@ before_call (struct call *call, z_streamp strm, int flush)
 }
 
 static void
-after_call (struct call *call)
+after_call (struct call *call, int err)
 {
   uInt consumed_in;
   uInt consumed_out;
@@ -228,7 +228,8 @@ after_call (struct call *call)
   write_or_die (call->stream->ifd, call->next_in, consumed_in);
   consumed_out = call->stream->strm->next_out - call->next_out;
   write_or_die (call->stream->ofd, call->next_out, consumed_out);
-  n = snprintf (line, sizeof (line), "%u %u\n", consumed_in, consumed_out);
+  n = snprintf (line, sizeof (line), "%u %u %i\n", consumed_in, consumed_out,
+                err);
   write_or_die (call->stream->mfd, line, n);
 }
 
@@ -293,7 +294,7 @@ extern int REPLACEMENT (deflate) (z_streamp strm, int flush)
 
   before_call (&call, strm, flush);
   err = ORIG (deflate) (strm, flush);
-  after_call (&call);
+  after_call (&call, err);
   return err;
 }
 
@@ -360,7 +361,7 @@ extern int REPLACEMENT (inflate) (z_streamp strm, int flush)
 
   before_call (&call, strm, flush);
   err = ORIG (inflate) (strm, flush);
-  after_call (&call);
+  after_call (&call, err);
   return err;
 }
 

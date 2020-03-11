@@ -174,6 +174,7 @@ replay_one (struct replay_state *replay, int *eof, const char *argv0)
   int flush;
   unsigned int exp_consumed_in;
   unsigned int exp_consumed_out;
+  int exp_err;
   long fseek_offset;
   void *buf;
   void *exp_buf;
@@ -229,8 +230,9 @@ replay_one (struct replay_state *replay, int *eof, const char *argv0)
     }
   z_err = replay->kind == 'd' ? deflate (&replay->strm, flush)
                               : inflate (&replay->strm, flush);
-  err = fscanf (replay->mfp, "%u %u", &exp_consumed_in, &exp_consumed_out);
-  if (err != 2)
+  err = fscanf (replay->mfp, "%u %u %i", &exp_consumed_in, &exp_consumed_out,
+                &exp_err);
+  if (err != 3)
     {
       fprintf (stderr, "%s: could not read %s results\n", argv0,
                stream_kind (replay->kind));
@@ -253,10 +255,10 @@ replay_one (struct replay_state *replay, int *eof, const char *argv0)
   consumed_in = avail_in - replay->strm.avail_in;
   consumed_out = avail_out - replay->strm.avail_out;
   actual_out = replay->strm.next_out - consumed_out;
-  if (z_err != Z_OK && z_err != Z_STREAM_END
-      && !(replay->kind == 'i' && consumed_in == 0 && consumed_out == 0
-           && z_err == Z_BUF_ERROR))
-    fprintf (stderr, "%s: %s failed\n", argv0, stream_kind (replay->kind));
+  if (z_err != exp_err)
+    fprintf (stderr,
+             "%s: %s return value mismatch (actual: %i, expected: %i)\n",
+             argv0, stream_kind (replay->kind), z_err, exp_err);
   else if (consumed_in != exp_consumed_in)
     fprintf (stderr, "%s: consumed_in mismatch (actual: %u, expected: %u)\n",
              argv0, consumed_in, exp_consumed_in);
@@ -372,7 +374,7 @@ main (int argc, char **argv)
 
   if (argc != 2)
     {
-      fprintf (stderr, "Usage: %s deflate.X.Y\n", argv[0]);
+      fprintf (stderr, "Usage: %s {deflate | inflate}.PID.STREAM\n", argv[0]);
       goto done;
     }
   if (replay_run (&replay, argv[1], -1UL, argv[0]) != EXIT_SUCCESS)
