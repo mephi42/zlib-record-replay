@@ -207,7 +207,7 @@ replay_one (struct replay_state *replay, int *eof, const char *argv0)
     case 'p':
       func = "deflateParams";
       err = fscanf (replay->mfp, "%i %i", &level, &strategy);
-      if (err != 1)
+      if (err != 2)
         {
           fprintf (stderr, "%s: could not read %s arguments\n", argv0, func);
           return EXIT_FAILURE;
@@ -221,6 +221,9 @@ replay_one (struct replay_state *replay, int *eof, const char *argv0)
           fprintf (stderr, "%s: could not read %s arguments\n", argv0, func);
           return EXIT_FAILURE;
         }
+      break;
+    case 'r':
+      func = replay->kind == 'd' ? "deflateReset" : "inflateReset";
       break;
     default:
       fprintf (stderr, "%s: unsupported call kind\n", argv0);
@@ -261,10 +264,20 @@ replay_one (struct replay_state *replay, int *eof, const char *argv0)
                argv0, avail_out);
       goto free_buf;
     }
-  z_err = call_kind[0] == 'p'
-              ? deflateParams (&replay->strm, level, strategy)
-              : replay->kind == 'd' ? deflate (&replay->strm, flush)
-                                    : inflate (&replay->strm, flush);
+  switch (call_kind[0])
+    {
+    case 'p':
+      z_err = deflateParams (&replay->strm, level, strategy);
+      break;
+    case 'c':
+      z_err = replay->kind == 'd' ? deflate (&replay->strm, flush)
+                                  : inflate (&replay->strm, flush);
+      break;
+    case 'r':
+      z_err = replay->kind == 'd' ? deflateReset (&replay->strm)
+                                  : inflateReset (&replay->strm);
+      break;
+    }
   err = fscanf (replay->mfp, "%u %u %i", &exp_consumed_in, &exp_consumed_out,
                 &exp_err);
   if (err != 3)

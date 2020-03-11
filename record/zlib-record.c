@@ -1,7 +1,9 @@
 #define _GNU_SOURCE
 #include <fcntl.h>
+#include <inttypes.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -169,11 +171,13 @@ DEFINE_INTERPOSE (deflateInit2_);
 DEFINE_INTERPOSE (deflateCopy);
 DEFINE_INTERPOSE (deflateParams);
 DEFINE_INTERPOSE (deflate);
+DEFINE_INTERPOSE (deflateReset);
 DEFINE_INTERPOSE (deflateEnd);
 DEFINE_INTERPOSE (inflateInit_);
 DEFINE_INTERPOSE (inflateInit2_);
 DEFINE_INTERPOSE (inflateCopy);
 DEFINE_INTERPOSE (inflate);
+DEFINE_INTERPOSE (inflateReset);
 DEFINE_INTERPOSE (inflateEnd);
 
 static void *
@@ -197,10 +201,12 @@ init ()
   INIT_INTERPOSE (deflateCopy);
   INIT_INTERPOSE (deflateParams);
   INIT_INTERPOSE (deflate);
+  INIT_INTERPOSE (deflateReset);
   INIT_INTERPOSE (deflateEnd);
   INIT_INTERPOSE (inflateInit_);
   INIT_INTERPOSE (inflateInit2_);
   INIT_INTERPOSE (inflate);
+  INIT_INTERPOSE (inflateReset);
   INIT_INTERPOSE (inflateEnd);
   INIT_INTERPOSE (inflateCopy);
 }
@@ -218,9 +224,9 @@ before_call (struct call *call)
 {
   z_streamp strm = call->stream->strm;
 
-  printf_stream_or_die (call->stream, "%p %u %p %u\n",
-                        (z_const void *)strm->next_in, strm->avail_in,
-                        (void *)strm->next_out, strm->avail_out);
+  printf_stream_or_die (call->stream, "0x%" PRIxPTR " %u 0x%" PRIxPTR " %u\n",
+                        (uintptr_t)strm->next_in, strm->avail_in,
+                        (uintptr_t)strm->next_out, strm->avail_out);
   call->next_in = strm->next_in;
   call->next_out = strm->next_out;
 }
@@ -239,7 +245,7 @@ after_call (struct call *call, int err)
                         err);
 }
 
-static _Thread_local int in_deflateInit_;
+static _Thread_local int depth;
 
 extern int REPLACEMENT (deflateInit_) (z_streamp strm, int level,
                                        const char *version, int stream_size)
@@ -247,10 +253,10 @@ extern int REPLACEMENT (deflateInit_) (z_streamp strm, int level,
   int err;
   struct hash_entry *stream;
 
-  in_deflateInit_ = 1;
+  depth++;
   err = ORIG (deflateInit_) (strm, level, version, stream_size);
-  in_deflateInit_ = 0;
-  if (err == Z_OK)
+  depth--;
+  if (depth == 0 && err == Z_OK)
     {
       stream = add_stream_or_die (strm, "deflate");
       printf_stream_or_die (stream, "d 1 %i\n", level);
@@ -266,9 +272,11 @@ extern int REPLACEMENT (deflateInit2_) (z_streamp strm, int level, int method,
   int err;
   struct hash_entry *stream;
 
+  depth++;
   err = ORIG (deflateInit2_) (strm, level, method, window_bits, mem_level,
                               strategy, version, stream_size);
-  if (!in_deflateInit_ && err == Z_OK)
+  depth--;
+  if (depth == 0 && err == Z_OK)
     {
       stream = add_stream_or_die (strm, "deflate");
       printf_stream_or_die (stream, "d 2 %i %i %i %i %i\n", level, method,
@@ -281,13 +289,13 @@ extern int REPLACEMENT (deflateCopy) (z_streamp dest, z_streamp source)
 {
   int err;
 
+  depth++;
   err = ORIG (deflateCopy) (dest, source);
-  if (err == Z_OK)
+  depth--;
+  if (depth == 0 && err == Z_OK)
     copy_stream_or_die (dest, source, "deflate");
   return err;
 }
-
-static _Thread_local int in_deflateParams_;
 
 extern int REPLACEMENT (deflateParams) (z_streamp strm, int level,
                                         int strategy)
@@ -295,12 +303,17 @@ extern int REPLACEMENT (deflateParams) (z_streamp strm, int level,
   struct call call;
   int err;
 
-  call.stream = find_stream_or_die (strm);
-  printf_stream_or_die (call.stream, "p %i %i\n", level, strategy);
-  before_call (&call);
-  in_deflateParams_ = 1;
+  if (depth == 0)
+    {
+      call.stream = find_stream_or_die (strm);
+      printf_stream_or_die (call.stream, "p %i %i\n", level, strategy);
+      before_call (&call);
+    }
+  depth++;
   err = ORIG (deflateParams) (strm, level, strategy);
-  in_deflateParams_ = 0;
+  depth--;
+  if (depth == 0)
+    after_call (&call, err);
   return err;
 }
 
@@ -309,23 +322,56 @@ extern int REPLACEMENT (deflate) (z_streamp strm, int flush)
   struct call call;
   int err;
 
-  call.stream = find_stream_or_die (strm);
-  printf_stream_or_die (call.stream, "c %i\n", flush);
-  if (!in_deflateParams_)
-    before_call (&call);
+  if (depth == 0)
+    {
+      call.stream = find_stream_or_die (strm);
+      printf_stream_or_die (call.stream, "c %i\n", flush);
+      before_call (&call);
+    }
+  depth++;
   err = ORIG (deflate) (strm, flush);
-  if (!in_deflateParams_)
+  depth--;
+  if (depth == 0)
     after_call (&call, err);
   return err;
 }
 
-extern int REPLACEMENT (deflateEnd) (z_streamp strm)
+static int
+reset_common (z_streamp strm, int (*orig) (z_streamp))
 {
-  end_stream_or_die (strm, "deflate");
-  return ORIG (deflateEnd) (strm);
+  struct call call;
+  int err;
+
+  if (depth == 0)
+    {
+      call.stream = find_stream_or_die (strm);
+      printf_stream_or_die (call.stream, "r\n");
+      before_call (&call);
+    }
+  depth++;
+  err = orig (strm);
+  depth--;
+  if (depth == 0)
+    after_call (&call, err);
+  return err;
 }
 
-static _Thread_local int in_inflateInit_;
+extern int REPLACEMENT (deflateReset) (z_streamp strm)
+{
+  return reset_common (strm, ORIG (deflateReset));
+}
+
+extern int REPLACEMENT (deflateEnd) (z_streamp strm)
+{
+  int err;
+
+  if (depth == 0)
+    end_stream_or_die (strm, "deflate");
+  depth++;
+  err = ORIG (deflateEnd) (strm);
+  depth--;
+  return err;
+}
 
 extern int REPLACEMENT (inflateInit_) (z_streamp strm, const char *version,
                                        int stream_size)
@@ -333,10 +379,10 @@ extern int REPLACEMENT (inflateInit_) (z_streamp strm, const char *version,
   int err;
   struct hash_entry *stream;
 
-  in_inflateInit_ = 1;
+  depth++;
   err = ORIG (inflateInit_) (strm, version, stream_size);
-  in_inflateInit_ = 0;
-  if (err == Z_OK)
+  depth--;
+  if (depth == 0 && err == Z_OK)
     {
       stream = add_stream_or_die (strm, "inflate");
       printf_stream_or_die (stream, "i 1\n");
@@ -350,8 +396,10 @@ extern int REPLACEMENT (inflateInit2_) (z_streamp strm, int window_bits,
   int err;
   struct hash_entry *stream;
 
+  depth++;
   err = ORIG (inflateInit2_) (strm, window_bits, version, stream_size);
-  if (!in_inflateInit_ && err == Z_OK)
+  depth--;
+  if (depth == 0 && err == Z_OK)
     {
       stream = add_stream_or_die (strm, "inflate");
       printf_stream_or_die (stream, "i 2 %i\n", window_bits);
@@ -363,8 +411,10 @@ extern int REPLACEMENT (inflateCopy) (z_streamp dest, z_streamp source)
 {
   int err;
 
+  depth++;
   err = ORIG (inflateCopy) (dest, source);
-  if (err == Z_OK)
+  depth--;
+  if (depth == 0 && err == Z_OK)
     copy_stream_or_die (dest, source, "inflate");
   return err;
 }
@@ -374,18 +424,35 @@ extern int REPLACEMENT (inflate) (z_streamp strm, int flush)
   struct call call;
   int err;
 
-  call.stream = find_stream_or_die (strm);
-  printf_stream_or_die (call.stream, "c %i\n", flush);
-  before_call (&call);
+  if (depth == 0)
+    {
+      call.stream = find_stream_or_die (strm);
+      printf_stream_or_die (call.stream, "c %i\n", flush);
+      before_call (&call);
+    }
+  depth++;
   err = ORIG (inflate) (strm, flush);
-  after_call (&call, err);
+  depth--;
+  if (depth == 0)
+    after_call (&call, err);
   return err;
+}
+
+extern int REPLACEMENT (inflateReset) (z_streamp strm)
+{
+  return reset_common (strm, ORIG (inflateReset));
 }
 
 extern int REPLACEMENT (inflateEnd) (z_streamp strm)
 {
-  end_stream_or_die (strm, "inflate");
-  return ORIG (inflateEnd) (strm);
+  int err;
+
+  if (depth == 0)
+    end_stream_or_die (strm, "inflate");
+  depth++;
+  err = ORIG (inflateEnd) (strm);
+  depth--;
+  return err;
 }
 
 #ifdef __APPLE__
@@ -394,10 +461,12 @@ DYLD_INTERPOSE (REPLACEMENT (deflateInit2_), deflateInit2_)
 DYLD_INTERPOSE (REPLACEMENT (deflateCopy), deflateCopy)
 DYLD_INTERPOSE (REPLACEMENT (deflateParams), deflateParams)
 DYLD_INTERPOSE (REPLACEMENT (deflate), deflate)
+DYLD_INTERPOSE (REPLACEMENT (deflateReset), deflateReset)
 DYLD_INTERPOSE (REPLACEMENT (deflateEnd), deflateEnd)
 DYLD_INTERPOSE (REPLACEMENT (inflateInit_), inflateInit_)
 DYLD_INTERPOSE (REPLACEMENT (inflateInit2_), inflateInit2_)
 DYLD_INTERPOSE (REPLACEMENT (inflateCopy), inflateCopy)
 DYLD_INTERPOSE (REPLACEMENT (inflate), inflate)
+DYLD_INTERPOSE (REPLACEMENT (inflateReset), inflateReset)
 DYLD_INTERPOSE (REPLACEMENT (inflateEnd), inflateEnd)
 #endif
