@@ -1,14 +1,24 @@
 #!/bin/sh
 set -e -u -x
+
 cd "$(dirname "$0")"
 basedir=$PWD
+
+shellcheck ci
+./fmt
+if [ "$(git status --porcelain | wc -l)" -ne 0 ]; then
+  git diff
+  exit 1
+fi
+
 workdir=$(mktemp -d)
 trap 'cd $basedir && rm -r $workdir' EXIT
 cd "$workdir"
-cmake "$basedir"
+cmake -DCMAKE_BUILD_TYPE=Debug "$basedir"
 make -j"$(getconf _NPROCESSORS_ONLN)"
 
 mkdir test1
 cd test1
-../record/zlib-record python3 -c 'import zlib; zlib.compress(b"abc")'
+../record/zlib-record python3 -c 'import zlib; zlib.decompress(zlib.compress(b"abc"))'
 ../replay/zlib-replay deflate.*.0
+../replay/zlib-replay inflate.*.1

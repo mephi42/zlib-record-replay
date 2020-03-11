@@ -131,6 +131,19 @@ end_stream_or_die (z_streamp strm, const char *kind)
   free (p);
 }
 
+__attribute__ ((format (printf, 2, 3))) static void
+printf_stream_or_die (struct hash_entry *stream, const char *fmt, ...)
+{
+  va_list args;
+  char line[256];
+  size_t n;
+
+  va_start (args, fmt);
+  n = vsnprintf (line, sizeof (line), fmt, args);
+  write_or_die (stream->mfd, line, n);
+  va_end (args);
+}
+
 static void
 copy_stream_or_die (z_streamp dest, z_streamp source, const char *kind)
 {
@@ -138,8 +151,6 @@ copy_stream_or_die (z_streamp dest, z_streamp source, const char *kind)
   struct hash_entry *source_stream;
   unsigned long pid;
   unsigned long off;
-  char line[256];
-  size_t n;
 
   source_stream = find_stream_or_die (source);
   dest_stream = add_stream_or_die (dest, kind);
@@ -147,9 +158,8 @@ copy_stream_or_die (z_streamp dest, z_streamp source, const char *kind)
   off = (unsigned long)lseek (source_stream->mfd, 0, SEEK_CUR);
   if (off == -1UL)
     die ("lseek() failed");
-  n = snprintf (line, sizeof (line), "%c c %s.%lu.%lu %lu\n", kind[0], kind,
-                pid, source_stream->counter, off);
-  write_or_die (dest_stream->mfd, line, n);
+  printf_stream_or_die (dest_stream, "%c c %s.%lu.%lu %lu\n", kind[0], kind,
+                        pid, source_stream->counter, off);
 }
 
 #ifndef __APPLE__
@@ -157,6 +167,7 @@ copy_stream_or_die (z_streamp dest, z_streamp source, const char *kind)
 DEFINE_INTERPOSE (deflateInit_);
 DEFINE_INTERPOSE (deflateInit2_);
 DEFINE_INTERPOSE (deflateCopy);
+DEFINE_INTERPOSE (deflateParams);
 DEFINE_INTERPOSE (deflate);
 DEFINE_INTERPOSE (deflateEnd);
 DEFINE_INTERPOSE (inflateInit_);
@@ -184,6 +195,7 @@ init ()
   INIT_INTERPOSE (deflateInit_);
   INIT_INTERPOSE (deflateInit2_);
   INIT_INTERPOSE (deflateCopy);
+  INIT_INTERPOSE (deflateParams);
   INIT_INTERPOSE (deflate);
   INIT_INTERPOSE (deflateEnd);
   INIT_INTERPOSE (inflateInit_);
@@ -202,16 +214,13 @@ struct call
 };
 
 static void
-before_call (struct call *call, z_streamp strm, int flush)
+before_call (struct call *call)
 {
-  char line[256];
-  size_t n;
+  z_streamp strm = call->stream->strm;
 
-  call->stream = find_stream_or_die (strm);
-  n = snprintf (line, sizeof (line), "%p %u %p %u %i\n",
-                (z_const void *)strm->next_in, strm->avail_in,
-                (void *)strm->next_out, strm->avail_out, flush);
-  write_or_die (call->stream->mfd, line, n);
+  printf_stream_or_die (call->stream, "%p %u %p %u\n",
+                        (z_const void *)strm->next_in, strm->avail_in,
+                        (void *)strm->next_out, strm->avail_out);
   call->next_in = strm->next_in;
   call->next_out = strm->next_out;
 }
@@ -221,16 +230,13 @@ after_call (struct call *call, int err)
 {
   uInt consumed_in;
   uInt consumed_out;
-  char line[256];
-  size_t n;
 
   consumed_in = call->stream->strm->next_in - call->next_in;
   write_or_die (call->stream->ifd, call->next_in, consumed_in);
   consumed_out = call->stream->strm->next_out - call->next_out;
   write_or_die (call->stream->ofd, call->next_out, consumed_out);
-  n = snprintf (line, sizeof (line), "%u %u %i\n", consumed_in, consumed_out,
-                err);
-  write_or_die (call->stream->mfd, line, n);
+  printf_stream_or_die (call->stream, "%u %u %i\n", consumed_in, consumed_out,
+                        err);
 }
 
 static _Thread_local int in_deflateInit_;
@@ -240,8 +246,6 @@ extern int REPLACEMENT (deflateInit_) (z_streamp strm, int level,
 {
   int err;
   struct hash_entry *stream;
-  char line[256];
-  size_t n;
 
   in_deflateInit_ = 1;
   err = ORIG (deflateInit_) (strm, level, version, stream_size);
@@ -249,8 +253,7 @@ extern int REPLACEMENT (deflateInit_) (z_streamp strm, int level,
   if (err == Z_OK)
     {
       stream = add_stream_or_die (strm, "deflate");
-      n = snprintf (line, sizeof (line), "d 1 %i\n", level);
-      write_or_die (stream->mfd, line, n);
+      printf_stream_or_die (stream, "d 1 %i\n", level);
     }
   return err;
 }
@@ -262,17 +265,14 @@ extern int REPLACEMENT (deflateInit2_) (z_streamp strm, int level, int method,
 {
   int err;
   struct hash_entry *stream;
-  char line[256];
-  size_t n;
 
   err = ORIG (deflateInit2_) (strm, level, method, window_bits, mem_level,
                               strategy, version, stream_size);
   if (!in_deflateInit_ && err == Z_OK)
     {
       stream = add_stream_or_die (strm, "deflate");
-      n = snprintf (line, sizeof (line), "d 2 %i %i %i %i %i\n", level, method,
-                    window_bits, mem_level, strategy);
-      write_or_die (stream->mfd, line, n);
+      printf_stream_or_die (stream, "d 2 %i %i %i %i %i\n", level, method,
+                            window_bits, mem_level, strategy);
     }
   return err;
 }
@@ -287,14 +287,35 @@ extern int REPLACEMENT (deflateCopy) (z_streamp dest, z_streamp source)
   return err;
 }
 
+static _Thread_local int in_deflateParams_;
+
+extern int REPLACEMENT (deflateParams) (z_streamp strm, int level,
+                                        int strategy)
+{
+  struct call call;
+  int err;
+
+  call.stream = find_stream_or_die (strm);
+  printf_stream_or_die (call.stream, "p %i %i\n", level, strategy);
+  before_call (&call);
+  in_deflateParams_ = 1;
+  err = ORIG (deflateParams) (strm, level, strategy);
+  in_deflateParams_ = 0;
+  return err;
+}
+
 extern int REPLACEMENT (deflate) (z_streamp strm, int flush)
 {
   struct call call;
   int err;
 
-  before_call (&call, strm, flush);
+  call.stream = find_stream_or_die (strm);
+  printf_stream_or_die (call.stream, "c %i\n", flush);
+  if (!in_deflateParams_)
+    before_call (&call);
   err = ORIG (deflate) (strm, flush);
-  after_call (&call, err);
+  if (!in_deflateParams_)
+    after_call (&call, err);
   return err;
 }
 
@@ -311,8 +332,6 @@ extern int REPLACEMENT (inflateInit_) (z_streamp strm, const char *version,
 {
   int err;
   struct hash_entry *stream;
-  char line[256];
-  size_t n;
 
   in_inflateInit_ = 1;
   err = ORIG (inflateInit_) (strm, version, stream_size);
@@ -320,8 +339,7 @@ extern int REPLACEMENT (inflateInit_) (z_streamp strm, const char *version,
   if (err == Z_OK)
     {
       stream = add_stream_or_die (strm, "inflate");
-      n = snprintf (line, sizeof (line), "i 1\n");
-      write_or_die (stream->mfd, line, n);
+      printf_stream_or_die (stream, "i 1\n");
     }
   return err;
 }
@@ -331,15 +349,12 @@ extern int REPLACEMENT (inflateInit2_) (z_streamp strm, int window_bits,
 {
   int err;
   struct hash_entry *stream;
-  char line[256];
-  size_t n;
 
   err = ORIG (inflateInit2_) (strm, window_bits, version, stream_size);
   if (!in_inflateInit_ && err == Z_OK)
     {
       stream = add_stream_or_die (strm, "inflate");
-      n = snprintf (line, sizeof (line), "i 2 %i\n", window_bits);
-      write_or_die (stream->mfd, line, n);
+      printf_stream_or_die (stream, "i 2 %i\n", window_bits);
     }
   return err;
 }
@@ -359,7 +374,9 @@ extern int REPLACEMENT (inflate) (z_streamp strm, int flush)
   struct call call;
   int err;
 
-  before_call (&call, strm, flush);
+  call.stream = find_stream_or_die (strm);
+  printf_stream_or_die (call.stream, "c %i\n", flush);
+  before_call (&call);
   err = ORIG (inflate) (strm, flush);
   after_call (&call, err);
   return err;
@@ -375,6 +392,7 @@ extern int REPLACEMENT (inflateEnd) (z_streamp strm)
 DYLD_INTERPOSE (REPLACEMENT (deflateInit_), deflateInit_)
 DYLD_INTERPOSE (REPLACEMENT (deflateInit2_), deflateInit2_)
 DYLD_INTERPOSE (REPLACEMENT (deflateCopy), deflateCopy)
+DYLD_INTERPOSE (REPLACEMENT (deflateParams), deflateParams)
 DYLD_INTERPOSE (REPLACEMENT (deflate), deflate)
 DYLD_INTERPOSE (REPLACEMENT (deflateEnd), deflateEnd)
 DYLD_INTERPOSE (REPLACEMENT (inflateInit_), inflateInit_)

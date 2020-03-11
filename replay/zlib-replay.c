@@ -167,10 +167,14 @@ fread_all (void *buf, size_t count, FILE *stream)
 static int
 replay_one (struct replay_state *replay, int *eof, const char *argv0)
 {
+  char call_kind[2];
   unsigned long next_in;
   unsigned int avail_in;
   unsigned long next_out;
   unsigned int avail_out;
+  const char *func;
+  int level;
+  int strategy;
   int flush;
   unsigned int exp_consumed_in;
   unsigned int exp_consumed_out;
@@ -187,17 +191,46 @@ replay_one (struct replay_state *replay, int *eof, const char *argv0)
   Bytef *actual_out;
   int ret = EXIT_FAILURE;
 
-  err = fscanf (replay->mfp, "%lx %u %lx %u %i", &next_in, &avail_in,
-                &next_out, &avail_out, &flush);
+  err = fscanf (replay->mfp, "%1s", call_kind);
   if (err == EOF)
     {
       *eof = 1;
       return EXIT_SUCCESS;
     }
-  if (err != 5)
+  if (err != 1)
     {
-      fprintf (stderr, "%s: could not read %s arguments\n", argv0,
-               stream_kind (replay->kind));
+      fprintf (stderr, "%s: could not read call kind\n", argv0);
+      return EXIT_FAILURE;
+    }
+  switch (call_kind[0])
+    {
+    case 'p':
+      func = "deflateParams";
+      err = fscanf (replay->mfp, "%i %i", &level, &strategy);
+      if (err != 1)
+        {
+          fprintf (stderr, "%s: could not read %s arguments\n", argv0, func);
+          return EXIT_FAILURE;
+        }
+      break;
+    case 'c':
+      func = stream_kind (replay->kind);
+      err = fscanf (replay->mfp, "%i", &flush);
+      if (err != 1)
+        {
+          fprintf (stderr, "%s: could not read %s arguments\n", argv0, func);
+          return EXIT_FAILURE;
+        }
+      break;
+    default:
+      fprintf (stderr, "%s: unsupported call kind\n", argv0);
+      return EXIT_FAILURE;
+    }
+  err = fscanf (replay->mfp, "%lx %u %lx %u", &next_in, &avail_in, &next_out,
+                &avail_out);
+  if (err != 4)
+    {
+      fprintf (stderr, "%s: could not read stream pointers\n", argv0);
       return EXIT_FAILURE;
     }
   buf = malloc (avail_in + PAGE_SIZE + avail_out + PAGE_SIZE + avail_out);
@@ -228,14 +261,15 @@ replay_one (struct replay_state *replay, int *eof, const char *argv0)
                argv0, avail_out);
       goto free_buf;
     }
-  z_err = replay->kind == 'd' ? deflate (&replay->strm, flush)
-                              : inflate (&replay->strm, flush);
+  z_err = call_kind[0] == 'p'
+              ? deflateParams (&replay->strm, level, strategy)
+              : replay->kind == 'd' ? deflate (&replay->strm, flush)
+                                    : inflate (&replay->strm, flush);
   err = fscanf (replay->mfp, "%u %u %i", &exp_consumed_in, &exp_consumed_out,
                 &exp_err);
   if (err != 3)
     {
-      fprintf (stderr, "%s: could not read %s results\n", argv0,
-               stream_kind (replay->kind));
+      fprintf (stderr, "%s: could not read %s results\n", argv0, func);
       return EXIT_FAILURE;
     }
   fseek_offset = (long)(int)(exp_consumed_in - valid_in);
@@ -258,7 +292,7 @@ replay_one (struct replay_state *replay, int *eof, const char *argv0)
   if (z_err != exp_err)
     fprintf (stderr,
              "%s: %s return value mismatch (actual: %i, expected: %i)\n",
-             argv0, stream_kind (replay->kind), z_err, exp_err);
+             argv0, func, z_err, exp_err);
   else if (consumed_in != exp_consumed_in)
     fprintf (stderr, "%s: consumed_in mismatch (actual: %u, expected: %u)\n",
              argv0, consumed_in, exp_consumed_in);
