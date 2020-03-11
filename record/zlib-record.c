@@ -11,19 +11,23 @@
 #ifdef __APPLE__
 #include "dyld-interposing.h"
 #define ORIG(x) x
-#define REPLACEMENT(x) replacement_ ## x
+#define REPLACEMENT(x) replacement_##x
 #else
 #include <dlfcn.h>
-#define ORIG(x) orig_ ## x
+#define ORIG(x) orig_##x
 #define REPLACEMENT(x) x
 #endif
 
-#define die(fmt, ...) do { \
-  fprintf (stderr, "zlib-record: " fmt "\n", ##__VA_ARGS__); \
-  abort (); \
-} while (0)
+#define die(fmt, ...)                                                         \
+  do                                                                          \
+    {                                                                         \
+      fprintf (stderr, "zlib-record: " fmt "\n", ##__VA_ARGS__);              \
+      abort ();                                                               \
+    }                                                                         \
+  while (0)
 
-static int creat_or_die (const char *path)
+static int
+creat_or_die (const char *path)
 {
   int fd;
 
@@ -33,7 +37,8 @@ static int creat_or_die (const char *path)
   return fd;
 }
 
-static void write_or_die (int fd, const void *buf, size_t count)
+static void
+write_or_die (int fd, const void *buf, size_t count)
 {
   ssize_t ret;
 
@@ -42,7 +47,7 @@ static void write_or_die (int fd, const void *buf, size_t count)
       ret = write (fd, buf, count);
       if (ret <= 0)
         die ("write() failed");
-      buf = (const char *) buf + ret;
+      buf = (const char *)buf + ret;
       count -= ret;
     }
   ret = fsync (fd);
@@ -50,13 +55,15 @@ static void write_or_die (int fd, const void *buf, size_t count)
     die ("fsync() failed");
 }
 
-static void close_or_die (int fd)
+static void
+close_or_die (int fd)
 {
   if (close (fd) < 0)
     die ("close() failed");
 }
 
-struct hash_entry {
+struct hash_entry
+{
   z_streamp strm;
   unsigned long counter;
   int ifd;
@@ -69,7 +76,8 @@ static struct hash_entry *streams;
 static atomic_ulong streams_counter;
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static struct hash_entry *add_stream_or_die (z_streamp strm, const char *kind)
+static struct hash_entry *
+add_stream_or_die (z_streamp strm, const char *kind)
 {
   unsigned long pid;
   char path[256];
@@ -79,13 +87,13 @@ static struct hash_entry *add_stream_or_die (z_streamp strm, const char *kind)
   if (!p)
     die ("oom");
   p->strm = strm;
-  pid = (unsigned long) getpid ();
-  p->counter = atomic_fetch_add(&streams_counter, 1);
-  snprintf(path, sizeof (path), "%s.%lu.%lu.in", kind, pid, p->counter);
+  pid = (unsigned long)getpid ();
+  p->counter = atomic_fetch_add (&streams_counter, 1);
+  snprintf (path, sizeof (path), "%s.%lu.%lu.in", kind, pid, p->counter);
   p->ifd = creat_or_die (path);
-  snprintf(path, sizeof (path), "%s.%lu.%lu.out", kind, pid, p->counter);
+  snprintf (path, sizeof (path), "%s.%lu.%lu.out", kind, pid, p->counter);
   p->ofd = creat_or_die (path);
-  snprintf(path, sizeof (path), "%s.%lu.%lu", kind, pid, p->counter);
+  snprintf (path, sizeof (path), "%s.%lu.%lu", kind, pid, p->counter);
   p->mfd = creat_or_die (path);
   pthread_mutex_lock (&mutex);
   HASH_ADD (hh, streams, strm, sizeof (z_streamp), p);
@@ -93,7 +101,8 @@ static struct hash_entry *add_stream_or_die (z_streamp strm, const char *kind)
   return p;
 }
 
-static struct hash_entry *find_stream_or_die (z_streamp strm)
+static struct hash_entry *
+find_stream_or_die (z_streamp strm)
 {
   struct hash_entry *p;
 
@@ -101,11 +110,12 @@ static struct hash_entry *find_stream_or_die (z_streamp strm)
   HASH_FIND (hh, streams, &strm, sizeof (z_streamp), p);
   pthread_mutex_unlock (&mutex);
   if (!p)
-    die ("unknown stream: %p", (void *) strm);
+    die ("unknown stream: %p", (void *)strm);
   return p;
 }
 
-static void end_stream_or_die (z_streamp strm, const char *kind)
+static void
+end_stream_or_die (z_streamp strm, const char *kind)
 {
   struct hash_entry *p;
 
@@ -115,7 +125,7 @@ static void end_stream_or_die (z_streamp strm, const char *kind)
     HASH_DELETE (hh, streams, p);
   pthread_mutex_unlock (&mutex);
   if (!p)
-    die ("unknown %s stream: %p", kind, (void *) strm);
+    die ("unknown %s stream: %p", kind, (void *)strm);
   close_or_die (p->ifd);
   close_or_die (p->ofd);
   free (p);
@@ -133,12 +143,12 @@ copy_stream_or_die (z_streamp dest, z_streamp source, const char *kind)
 
   source_stream = find_stream_or_die (source);
   dest_stream = add_stream_or_die (dest, kind);
-  pid = (unsigned long) getpid ();
-  off = (unsigned long) lseek (source_stream->mfd, 0, SEEK_CUR);
+  pid = (unsigned long)getpid ();
+  off = (unsigned long)lseek (source_stream->mfd, 0, SEEK_CUR);
   if (off == -1UL)
     die ("lseek() failed");
-  n = snprintf(line, sizeof (line), "%c c %s.%lu.%lu %lu\n",
-               kind[0], kind, pid, source_stream->counter, off);
+  n = snprintf (line, sizeof (line), "%c c %s.%lu.%lu %lu\n", kind[0], kind,
+                pid, source_stream->counter, off);
   write_or_die (dest_stream->mfd, line, n);
 }
 
@@ -155,7 +165,8 @@ DEFINE_INTERPOSE (inflateCopy);
 DEFINE_INTERPOSE (inflate);
 DEFINE_INTERPOSE (inflateEnd);
 
-static void *dlsym_or_die (const char *name)
+static void *
+dlsym_or_die (const char *name)
 {
   void *sym;
 
@@ -165,10 +176,10 @@ static void *dlsym_or_die (const char *name)
   return sym;
 }
 
-#define INIT_INTERPOSE(x) ORIG (x) = (typeof (&x)) dlsym_or_die (#x)
+#define INIT_INTERPOSE(x) ORIG (x) = (typeof (&x))dlsym_or_die (#x)
 
-__attribute__((constructor))
-static void init ()
+__attribute__ ((constructor)) static void
+init ()
 {
   INIT_INTERPOSE (deflateInit_);
   INIT_INTERPOSE (deflateInit2_);
@@ -183,28 +194,30 @@ static void init ()
 }
 #endif
 
-struct call {
+struct call
+{
   struct hash_entry *stream;
   z_const Bytef *next_in;
   Bytef *next_out;
 };
 
-static void before_call (struct call *call, z_streamp strm, int flush)
+static void
+before_call (struct call *call, z_streamp strm, int flush)
 {
   char line[256];
   size_t n;
 
   call->stream = find_stream_or_die (strm);
-  n = snprintf(line, sizeof (line), "%p %u %p %u %i\n",
-               (z_const void *) strm->next_in, strm->avail_in,
-               (void *) strm->next_out, strm->avail_out,
-               flush);
+  n = snprintf (line, sizeof (line), "%p %u %p %u %i\n",
+                (z_const void *)strm->next_in, strm->avail_in,
+                (void *)strm->next_out, strm->avail_out, flush);
   write_or_die (call->stream->mfd, line, n);
   call->next_in = strm->next_in;
   call->next_out = strm->next_out;
 }
 
-static void after_call (struct call *call)
+static void
+after_call (struct call *call)
 {
   uInt consumed_in;
   uInt consumed_out;
@@ -215,8 +228,7 @@ static void after_call (struct call *call)
   write_or_die (call->stream->ifd, call->next_in, consumed_in);
   consumed_out = call->stream->strm->next_out - call->next_out;
   write_or_die (call->stream->ofd, call->next_out, consumed_out);
-  n = snprintf(line, sizeof (line), "%u %u\n",
-               consumed_in, consumed_out);
+  n = snprintf (line, sizeof (line), "%u %u\n", consumed_in, consumed_out);
   write_or_die (call->stream->mfd, line, n);
 }
 
@@ -236,7 +248,7 @@ extern int REPLACEMENT (deflateInit_) (z_streamp strm, int level,
   if (err == Z_OK)
     {
       stream = add_stream_or_die (strm, "deflate");
-      n = snprintf(line, sizeof (line), "d 1 %i\n", level);
+      n = snprintf (line, sizeof (line), "d 1 %i\n", level);
       write_or_die (stream->mfd, line, n);
     }
   return err;
@@ -252,17 +264,13 @@ extern int REPLACEMENT (deflateInit2_) (z_streamp strm, int level, int method,
   char line[256];
   size_t n;
 
-  err = ORIG (deflateInit2_) (strm, level, method,
-                              window_bits, mem_level,
-                              strategy, version,
-                              stream_size);
+  err = ORIG (deflateInit2_) (strm, level, method, window_bits, mem_level,
+                              strategy, version, stream_size);
   if (!in_deflateInit_ && err == Z_OK)
     {
       stream = add_stream_or_die (strm, "deflate");
-      n = snprintf(line, sizeof (line), "d 2 %i %i %i %i %i\n",
-                   level, method,
-                   window_bits, mem_level,
-                   strategy);
+      n = snprintf (line, sizeof (line), "d 2 %i %i %i %i %i\n", level, method,
+                    window_bits, mem_level, strategy);
       write_or_die (stream->mfd, line, n);
     }
   return err;
@@ -297,8 +305,8 @@ extern int REPLACEMENT (deflateEnd) (z_streamp strm)
 
 static _Thread_local int in_inflateInit_;
 
-extern int REPLACEMENT (inflateInit_) (z_streamp strm,
-                                       const char *version, int stream_size)
+extern int REPLACEMENT (inflateInit_) (z_streamp strm, const char *version,
+                                       int stream_size)
 {
   int err;
   struct hash_entry *stream;
@@ -311,7 +319,7 @@ extern int REPLACEMENT (inflateInit_) (z_streamp strm,
   if (err == Z_OK)
     {
       stream = add_stream_or_die (strm, "inflate");
-      n = snprintf(line, sizeof (line), "i 1\n");
+      n = snprintf (line, sizeof (line), "i 1\n");
       write_or_die (stream->mfd, line, n);
     }
   return err;
@@ -325,12 +333,11 @@ extern int REPLACEMENT (inflateInit2_) (z_streamp strm, int window_bits,
   char line[256];
   size_t n;
 
-  err = ORIG (inflateInit2_) (strm, window_bits,
-                              version, stream_size);
+  err = ORIG (inflateInit2_) (strm, window_bits, version, stream_size);
   if (!in_inflateInit_ && err == Z_OK)
     {
       stream = add_stream_or_die (strm, "inflate");
-      n = snprintf(line, sizeof (line), "i 2 %i\n", window_bits);
+      n = snprintf (line, sizeof (line), "i 2 %i\n", window_bits);
       write_or_die (stream->mfd, line, n);
     }
   return err;

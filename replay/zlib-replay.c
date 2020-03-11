@@ -4,7 +4,8 @@
 #include <stdlib.h>
 #include <zlib.h>
 
-struct replay_state {
+struct replay_state
+{
   FILE *mfp;
   FILE *ifp;
   FILE *ofp;
@@ -19,13 +20,14 @@ static int replay_end (struct replay_state *replay);
 #define PAGE_SIZE 0x1000
 #define PAGE_OFFSET_MASK 0xfff
 
-static const char *stream_kind (char kind)
+static const char *
+stream_kind (char kind)
 {
   return kind == 'd' ? "deflate" : "inflate";
 }
 
-static int replay_copy (struct replay_state *replay, int *z_err,
-                        const char *argv0)
+static int
+replay_copy (struct replay_state *replay, int *z_err, const char *argv0)
 {
   char source_path[256];
   unsigned long source_off;
@@ -34,8 +36,8 @@ static int replay_copy (struct replay_state *replay, int *z_err,
 
   if (fscanf (replay->mfp, "%256s %lu", source_path, &source_off) != 2)
     {
-      fprintf (stderr, "%s: could not read %sCopy arguments\n",
-               argv0, stream_kind (replay->kind));
+      fprintf (stderr, "%s: could not read %sCopy arguments\n", argv0,
+               stream_kind (replay->kind));
       return EXIT_FAILURE;
     }
   err = replay_run (&replay_source, source_path, source_off, argv0);
@@ -44,14 +46,15 @@ static int replay_copy (struct replay_state *replay, int *z_err,
       fprintf (stderr, "%s: run %s failed\n", argv0, source_path);
       return EXIT_FAILURE;
     }
-  *z_err = replay->kind == 'd' ?
-           deflateCopy (&replay->strm, &replay_source.strm) :
-           inflateCopy (&replay->strm, &replay_source.strm);
+  *z_err = replay->kind == 'd'
+               ? deflateCopy (&replay->strm, &replay_source.strm)
+               : inflateCopy (&replay->strm, &replay_source.strm);
   replay_end (&replay_source); /* ignore rc */
   return EXIT_SUCCESS;
 }
 
-static int replay_init (struct replay_state *replay, const char *argv0)
+static int
+replay_init (struct replay_state *replay, const char *argv0)
 {
   char init_method[2];
   int level;
@@ -61,7 +64,7 @@ static int replay_init (struct replay_state *replay, const char *argv0)
   int strategy;
   int err;
 
-  memset(&replay->strm, 0, sizeof (replay->strm));
+  memset (&replay->strm, 0, sizeof (replay->strm));
   if (fscanf (replay->mfp, "%c", &replay->kind) != 1)
     {
       fprintf (stderr, "%s: could not read stream type\n", argv0);
@@ -76,22 +79,23 @@ static int replay_init (struct replay_state *replay, const char *argv0)
     {
       if (fscanf (replay->mfp, "%i", &level) != 1)
         {
-          fprintf (stderr, "%s: could not read deflateInit arguments\n", argv0);
+          fprintf (stderr, "%s: could not read deflateInit arguments\n",
+                   argv0);
           return EXIT_FAILURE;
         }
       err = deflateInit (&replay->strm, level);
     }
   else if (replay->kind == 'd' && init_method[0] == '2')
     {
-      if (fscanf (replay->mfp, "%i %i %i %i %i",
-                  &level, &method, &window_bits, &mem_level, &strategy) != 5)
+      if (fscanf (replay->mfp, "%i %i %i %i %i", &level, &method, &window_bits,
+                  &mem_level, &strategy)
+          != 5)
         {
           fprintf (stderr, "%s: could not read deflateInit2 arguments\n",
                    argv0);
           return EXIT_FAILURE;
         }
-      err = deflateInit2 (&replay->strm, level, method,
-                          window_bits, mem_level,
+      err = deflateInit2 (&replay->strm, level, method, window_bits, mem_level,
                           strategy);
     }
   else if (replay->kind == 'd' && init_method[0] == 'c')
@@ -126,17 +130,20 @@ static int replay_init (struct replay_state *replay, const char *argv0)
   return err == Z_OK ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-static void *align_up (void *p, int size)
+static void *
+align_up (void *p, int size)
 {
-  return (void *) (((uintptr_t) p + size - 1) & ~(size - 1));
+  return (void *)(((uintptr_t)p + size - 1) & ~(size - 1));
 }
 
-static void *align_up_with_offset (void *p, int size, int offset)
+static void *
+align_up_with_offset (void *p, int size, int offset)
 {
-  return (char *) align_up ((char *) p - offset, size) + offset;
+  return (char *)align_up ((char *)p - offset, size) + offset;
 }
 
-static ssize_t fread_all (void *buf, size_t count, FILE *stream)
+static ssize_t
+fread_all (void *buf, size_t count, FILE *stream)
 {
   ssize_t ret;
   size_t n = count;
@@ -151,13 +158,14 @@ static ssize_t fread_all (void *buf, size_t count, FILE *stream)
           else
             return -1;
         }
-      buf = (char *) buf + ret;
+      buf = (char *)buf + ret;
       n -= ret;
     }
   return count - n;
 }
 
-static int replay_one (struct replay_state *replay, int *eof, const char *argv0)
+static int
+replay_one (struct replay_state *replay, int *eof, const char *argv0)
 {
   unsigned long next_in;
   unsigned int avail_in;
@@ -178,8 +186,8 @@ static int replay_one (struct replay_state *replay, int *eof, const char *argv0)
   Bytef *actual_out;
   int ret = EXIT_FAILURE;
 
-  err = fscanf (replay->mfp, "%lx %u %lx %u %i",
-                &next_in, &avail_in, &next_out, &avail_out, &flush);
+  err = fscanf (replay->mfp, "%lx %u %lx %u %i", &next_in, &avail_in,
+                &next_out, &avail_out, &flush);
   if (err == EOF)
     {
       *eof = 1;
@@ -187,8 +195,8 @@ static int replay_one (struct replay_state *replay, int *eof, const char *argv0)
     }
   if (err != 5)
     {
-      fprintf (stderr, "%s: could not read %s arguments\n",
-               argv0, stream_kind (replay->kind));
+      fprintf (stderr, "%s: could not read %s arguments\n", argv0,
+               stream_kind (replay->kind));
       return EXIT_FAILURE;
     }
   buf = malloc (avail_in + PAGE_SIZE + avail_out + PAGE_SIZE + avail_out);
@@ -197,13 +205,12 @@ static int replay_one (struct replay_state *replay, int *eof, const char *argv0)
       fprintf (stderr, "%s: oom\n", argv0);
       return EXIT_FAILURE;
     }
-  replay->strm.next_in = align_up_with_offset (
-      buf, PAGE_SIZE, (int) next_in & PAGE_OFFSET_MASK);
+  replay->strm.next_in
+      = align_up_with_offset (buf, PAGE_SIZE, (int)next_in & PAGE_OFFSET_MASK);
   replay->strm.avail_in = avail_in;
-  replay->strm.next_out = align_up_with_offset (
-      replay->strm.next_in + avail_in,
-      PAGE_SIZE,
-      (int) next_out & PAGE_OFFSET_MASK);
+  replay->strm.next_out
+      = align_up_with_offset (replay->strm.next_in + avail_in, PAGE_SIZE,
+                              (int)next_out & PAGE_OFFSET_MASK);
   replay->strm.avail_out = avail_out;
   exp_buf = replay->strm.next_out + avail_out;
   valid_in = fread_all (replay->strm.next_in, avail_in, replay->ifp);
@@ -220,40 +227,36 @@ static int replay_one (struct replay_state *replay, int *eof, const char *argv0)
                argv0, avail_out);
       goto free_buf;
     }
-  z_err = replay->kind == 'd' ?
-          deflate (&replay->strm, flush) :
-          inflate (&replay->strm, flush);
+  z_err = replay->kind == 'd' ? deflate (&replay->strm, flush)
+                              : inflate (&replay->strm, flush);
   err = fscanf (replay->mfp, "%u %u", &exp_consumed_in, &exp_consumed_out);
   if (err != 2)
     {
-      fprintf (stderr, "%s: could not read %s results\n",
-               argv0, stream_kind (replay->kind));
+      fprintf (stderr, "%s: could not read %s results\n", argv0,
+               stream_kind (replay->kind));
       return EXIT_FAILURE;
     }
-  fseek_offset = (long) (int) (exp_consumed_in - valid_in);
+  fseek_offset = (long)(int)(exp_consumed_in - valid_in);
   if (fseek (replay->ifp, fseek_offset, SEEK_CUR) == -1)
     {
-      fprintf (stderr, "%s: could not seek by %ld in the input file\n",
-               argv0, fseek_offset);
+      fprintf (stderr, "%s: could not seek by %ld in the input file\n", argv0,
+               fseek_offset);
       goto free_buf;
     }
-  fseek_offset = (long) (int) (exp_consumed_out - valid_out);
+  fseek_offset = (long)(int)(exp_consumed_out - valid_out);
   if (fseek (replay->ofp, fseek_offset, SEEK_CUR) == -1)
     {
-      fprintf (stderr, "%s: could not seek by %ld in the output file\n",
-               argv0, fseek_offset);
+      fprintf (stderr, "%s: could not seek by %ld in the output file\n", argv0,
+               fseek_offset);
       goto free_buf;
     }
   consumed_in = avail_in - replay->strm.avail_in;
   consumed_out = avail_out - replay->strm.avail_out;
   actual_out = replay->strm.next_out - consumed_out;
-  if (z_err != Z_OK && z_err != Z_STREAM_END &&
-      !(replay->kind == 'i' &&
-        consumed_in == 0 &&
-        consumed_out == 0 &&
-        z_err == Z_BUF_ERROR))
-    fprintf (stderr, "%s: %s failed\n",
-             argv0, stream_kind (replay->kind));
+  if (z_err != Z_OK && z_err != Z_STREAM_END
+      && !(replay->kind == 'i' && consumed_in == 0 && consumed_out == 0
+           && z_err == Z_BUF_ERROR))
+    fprintf (stderr, "%s: %s failed\n", argv0, stream_kind (replay->kind));
   else if (consumed_in != exp_consumed_in)
     fprintf (stderr, "%s: consumed_in mismatch (actual: %u, expected: %u)\n",
              argv0, consumed_in, exp_consumed_in);
@@ -261,8 +264,8 @@ static int replay_one (struct replay_state *replay, int *eof, const char *argv0)
     fprintf (stderr, "%s: consumed_out mismatch (actual: %u expected:%u)\n",
              argv0, consumed_out, exp_consumed_out);
   else if (memcmp (actual_out, exp_buf, consumed_out) != 0)
-    fprintf (stderr, "%s: %scompressed data mismatch\n",
-             argv0, replay->kind == 'd' ? "" : "un");
+    fprintf (stderr, "%s: %scompressed data mismatch\n", argv0,
+             replay->kind == 'd' ? "" : "un");
   else
     ret = EXIT_SUCCESS;
 free_buf:
@@ -270,8 +273,8 @@ free_buf:
   return ret;
 }
 
-static int replay_open (struct replay_state *replay, const char *path,
-                        const char *argv0)
+static int
+replay_open (struct replay_state *replay, const char *path, const char *argv0)
 {
   char buf[256];
 
@@ -280,13 +283,13 @@ static int replay_open (struct replay_state *replay, const char *path,
       fprintf (stderr, "%s: could not open %s\n", argv0, path);
       goto fail;
     }
-  buf[snprintf(buf, sizeof (buf) - 1, "%s.in", path)] = 0;
+  buf[snprintf (buf, sizeof (buf) - 1, "%s.in", path)] = 0;
   if (!(replay->ifp = fopen (buf, "r")))
     {
       fprintf (stderr, "%s: could not open %s\n", argv0, buf);
       goto fail_close_mfp;
     }
-  buf[snprintf(buf, sizeof (buf) - 1, "%s.out", path)] = 0;
+  buf[snprintf (buf, sizeof (buf) - 1, "%s.out", path)] = 0;
   if (!(replay->ofp = fopen (buf, "r")))
     {
       fprintf (stderr, "%s: could not open %s\n", argv0, buf);
@@ -301,15 +304,17 @@ fail:
   return EXIT_FAILURE;
 }
 
-static void replay_close (struct replay_state *replay)
+static void
+replay_close (struct replay_state *replay)
 {
   fclose (replay->ofp);
   fclose (replay->ifp);
   fclose (replay->mfp);
 }
 
-static int replay_run (struct replay_state *replay, const char *path,
-                       unsigned long end_off, const char *argv0)
+static int
+replay_run (struct replay_state *replay, const char *path,
+            unsigned long end_off, const char *argv0)
 {
   int eof = 0;
   unsigned long off;
@@ -327,7 +332,7 @@ static int replay_run (struct replay_state *replay, const char *path,
     }
   while (!eof)
     {
-      off = (unsigned long) ftell (replay->mfp);
+      off = (unsigned long)ftell (replay->mfp);
       if (off == -1UL)
         {
           fprintf (stderr, "%s: ftell() failed\n", argv0);
@@ -337,10 +342,11 @@ static int replay_run (struct replay_state *replay, const char *path,
         break;
       if (replay_one (replay, &eof, argv0) != EXIT_SUCCESS)
         {
-          fprintf (stderr, "%s: %s failed at offset "
-                           "uncompressed:%lu compressed:%lu\n",
-                   argv0, stream_kind (replay->kind),
-                   replay->strm.total_in, replay->strm.total_out);
+          fprintf (stderr,
+                   "%s: %s failed at offset "
+                   "uncompressed:%lu compressed:%lu\n",
+                   argv0, stream_kind (replay->kind), replay->strm.total_in,
+                   replay->strm.total_out);
           goto close_replay;
         }
     }
@@ -351,14 +357,15 @@ done:
   return ret;
 }
 
-static int replay_end (struct replay_state *replay)
+static int
+replay_end (struct replay_state *replay)
 {
-  return replay->kind == 'd' ?
-         deflateEnd (&replay->strm) :
-         inflateEnd (&replay->strm);
+  return replay->kind == 'd' ? deflateEnd (&replay->strm)
+                             : inflateEnd (&replay->strm);
 }
 
-int main (int argc, char **argv)
+int
+main (int argc, char **argv)
 {
   struct replay_state replay;
   int ret = EXIT_FAILURE;
@@ -375,8 +382,8 @@ int main (int argc, char **argv)
     }
   if (replay_end (&replay) != Z_OK)
     {
-      fprintf (stderr, "%s: %sEnd %s failed\n",
-               argv[0], stream_kind (replay.kind), argv[1]);
+      fprintf (stderr, "%s: %sEnd %s failed\n", argv[0],
+               stream_kind (replay.kind), argv[1]);
       goto done;
     }
   ret = EXIT_SUCCESS;
